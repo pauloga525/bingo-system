@@ -1,0 +1,43 @@
+[project]
+name = "sistema-para-bingo"
+version = "2.0.0"
+description = "Sistema de gestión de Bingo UETS (Flask + MongoDB)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["env"]
+
+[tool.ruff.lint]
+# C90 = complejidad ciclomática, S = reglas de seguridad de bandit
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "C90", "S"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # textos en español con tildes/guiones
+
+[tool.ruff.lint.mccabe]
+max-complexity = 8
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts históricos de mantenimiento: funciones largas y salidas de consola extensas.
+"scripts/**" = ["C901", "E501", "SIM108"]
+"tests/**" = ["S101", "S105", "S106", "S311"]  # assert, contraseñas de prueba y random
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["bingo"]
+strict = true
+ignore_missing_imports = true
+disallow_any_generics = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["bingo"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true

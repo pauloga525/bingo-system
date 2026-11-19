@@ -1,0 +1,194 @@
+"""Prepara una temporada nueva del Bingo.
+
+1. Lee el Excel de alumnos (una fila por estudiante) y guarda en ``Estudiantes``
+   solo lo necesario: nombres, apellidos, cédula, curso, especialidad,
+   nivel y paralelo. No se copian datos de padres, direcciones, etc.
+2. Genera ``--tablas`` cartones nuevos (CARD00001..N) y su PDF.
+3. Limpia la temporada anterior:
+   - borra todas las tablas y las tablas ganadoras;
+   - borra los participantes alumnos y externos;
+   - deja a los participantes docentes sin tablas (total 0);
+   - pone en cero las reservas y contadores de los animadores (``Users``);
+   - reemplaza la colección ``Estudiantes`` por la del Excel.
+4. Reinicia la partida (snapshot JSON vacío hasta que se asignen tablas).
+
+Por defecto SOLO MUESTRA lo que haría. Para aplicar los cambios use ``--ejecutar``
+(haga antes un respaldo con mongodump).
+
+Uso:
+    python scripts/nueva_temporada.py "Alumnos(2026-2027).xlsx" --tablas 11000 --pdf "upload/tablas 2026.pdf"
+    python scripts/nueva_temporada.py "Alumnos(2026-2027).xlsx" --tablas 11000 --pdf "upload/tablas 2026.pdf" --ejecutar
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+import time
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+from _common import get_database
+
+from bingo.config import Settings
+from bingo.db import Collections
+from bingo.domain.cards import MAX_CARDS, generate_unique_cards, validar_duplicados
+from bingo.services.game import GameService
+from bingo.services.pdf_render import render_cards_pdf
+
+# Columnas del Excel que se usan (se buscan por nombre, no por posición).
+COLUMNAS = ("Nombre", "Primer Apellido", "Segundo Apellido", "Curso", "Num documento")
+# "EDUCACIÓN GENERAL BÁSICA Básica Media 7 A" / "BACHILLERATO Ciencias 2 BGUC F1"
+CURSO_RE = re.compile(r"^(BACHILLERATO|EDUCACI[ÓO]N GENERAL B[ÁA]SICA)\s+(.+?)\s+(\d+)\s+(?:[A-Z]+\s+)?([A-Z]\d?)$")
+# Mismo formato que ya usaba la colección Estudiantes.
+NOMBRE_CURSO = {"BACHILLERATO": "BACHILLERATO", "EGB": "Educación General Básica"}
+CAMPOS_RESERVA = ("totalTables", "usedTables", "fromSerial", "toSerial", "reserved_table_ids", "total_vendido")
+
+
+def _texto(valor: Any) -> str:
+    return " ".join(str(valor or "").split())
+
+
+def parse_curso(curso: str) -> dict[str, Any] | None:
+    m = CURSO_RE.match(_texto(curso))
+    if not m:
+        return None
+    nivel_educativo, especialidad, nivel, paralelo = m.groups()
+    clave = "BACHILLERATO" if nivel_educativo == "BACHILLERATO" else "EGB"
+    return {"Curso": NOMBRE_CURSO[clave], "Especialidad": especialidad, "Nivel": int(nivel), "Paralelo": paralelo}
+
+
+def leer_estudiantes(excel: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """Devuelve ``(estudiantes, errores)``. Una fila con error no se importa."""
+    import openpyxl  # solo lo necesita este script
+
+    wb = openpyxl.load_workbook(excel, read_only=True, data_only=True)
+    filas = wb.worksheets[0].iter_rows(values_only=True)
+    encabezado = [_texto(h) for h in next(filas)]
+    faltan = [c for c in COLUMNAS if c not in encabezado]
+    if faltan:
+        raise SystemExit(f"Faltan columnas en el Excel: {faltan}")
+    idx = {c: encabezado.index(c) for c in COLUMNAS}  # primera aparición (hay columnas repetidas)
+
+    estudiantes: list[dict[str, Any]] = []
+    errores: list[str] = []
+    for n, fila in enumerate(filas, start=2):
+        if not any(fila):
+            continue
+        valor = {c: _texto(fila[i]) for c, i in idx.items()}
+        curso = parse_curso(valor["Curso"])
+        cedula = valor["Num documento"]
+        if curso is None:
+            errores.append(f"fila {n}: curso no reconocido {valor['Curso']!r}")
+            continue
+        if not cedula or not valor["Nombre"] or not valor["Primer Apellido"]:
+            errores.append(f"fila {n}: falta cédula, nombre o primer apellido")
+            continue
+        doc: dict[str, Any] = {
+            "Primer Apellido": valor["Primer Apellido"].upper(),
+            "Segundo Apellido": valor["Segundo Apellido"].upper(),
+            "Nombre": valor["Nombre"].upper(),
+            **curso,
+            "Num documento": cedula,
+        }
+        estudiantes.append(doc)
+
+    for campo in ("Num documento",):
+        repetidos = [v for v, k in Counter(e.get(campo) for e in estudiantes if e.get(campo)).items() if k > 1]
+        if repetidos:
+            errores.append(f"{campo} repetido en el Excel: {repetidos[:10]}")
+    return estudiantes, errores
+
+
+def resumen_actual(cols: Collections) -> dict[str, Any]:
+    return {
+        "tablas": cols.tables.count_documents({}),
+        "tablas_asignadas": cols.tables.count_documents({"stateAsigned": True}),
+        "tablas_ganadoras": cols.winners.count_documents({}),
+        "participantes_alumnos_externos": cols.participants.count_documents({"tipo": {"$in": ["alumno", "externo"]}}),
+        "participantes_docentes": cols.participants.count_documents({"tipo": "docente"}),
+        "participantes_otro_tipo": cols.participants.count_documents(
+            {"tipo": {"$nin": ["alumno", "externo", "docente"]}}
+        ),
+        "animadores_con_reserva": cols.users.count_documents({"totalTables": {"$gt": 0}}),
+        "estudiantes": cols.students.count_documents({}),
+    }
+
+
+def limpiar_temporada(cols: Collections) -> dict[str, int]:
+    res = {
+        "tablas_borradas": cols.tables.delete_many({}).deleted_count,
+        "ganadoras_borradas": cols.winners.delete_many({}).deleted_count,
+        "participantes_borrados": cols.participants.delete_many({"tipo": {"$in": ["alumno", "externo"]}}).deleted_count,
+        "docentes_sin_tablas": cols.participants.update_many(
+            {"tipo": "docente"}, {"$set": {"tablas": [], "total_pagar": 0}}
+        ).modified_count,
+        "animadores_en_cero": cols.users.update_many(
+            {}, {"$unset": {campo: "" for campo in CAMPOS_RESERVA}}
+        ).modified_count,
+        "estudiantes_borrados": cols.students.delete_many({}).deleted_count,
+    }
+    return res
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("excel", type=Path, help="Excel de alumnos de la temporada")
+    parser.add_argument("--tablas", type=int, default=11000, help="Cantidad de tablas nuevas (default 11000)")
+    parser.add_argument("--pdf", type=Path, default=Path("upload/tablas 2026.pdf"), help="Ruta del PDF de tablas")
+    parser.add_argument("--ejecutar", action="store_true", help="Aplica los cambios (sin esto solo simula)")
+    args = parser.parse_args()
+
+    if not 0 < args.tablas <= MAX_CARDS:
+        raise SystemExit(f"--tablas debe estar entre 1 y {MAX_CARDS}")
+
+    estudiantes, errores = leer_estudiantes(args.excel)
+    print(f"Excel: {len(estudiantes)} estudiantes válidos, {len(errores)} con problemas.")
+    for e in errores[:20]:
+        print("  -", e)
+    print("  Ejemplo:", estudiantes[0] if estudiantes else "-")
+    if any("repetido" in e for e in errores):
+        raise SystemExit("Hay cédulas repetidas en el Excel; corríjalo antes de continuar.")
+
+    db = get_database()
+    cols = Collections.from_client(db.client, db.name)
+    print("Estado actual:", resumen_actual(cols))
+
+    if not args.ejecutar:
+        print("\nSIMULACIÓN: no se modificó nada. Agregue --ejecutar para aplicar.")
+        return 0
+
+    # 1) Tablas y PDF primero: si algo falla aquí todavía no se ha borrado nada.
+    inicio = time.time()
+    cards = generate_unique_cards(args.tablas)
+    validacion = validar_duplicados(cards)
+    if validacion["duplicados"]:
+        raise SystemExit("Se generaron tablas duplicadas; vuelva a ejecutar.")
+    args.pdf.parent.mkdir(parents=True, exist_ok=True)
+    args.pdf.write_bytes(render_cards_pdf(cards))
+    print(f"PDF con {len(cards)} tablas: {args.pdf.resolve()} ({time.time() - inicio:.0f} s)")
+
+    # 2) Limpieza de la temporada anterior.
+    print("Limpieza:", limpiar_temporada(cols))
+
+    # 3) Carga de lo nuevo.
+    ahora = time.time()
+    cols.tables.insert_many(
+        [
+            {"serial": c["serial"], "matrix": c["matrix"], "timestamp": ahora, "won": False, "stateAsigned": False}
+            for c in cards
+        ]
+    )
+    cols.students.insert_many(estudiantes)
+    print(f"Insertadas {len(cards)} tablas y {len(estudiantes)} estudiantes.")
+
+    # 4) Partida en blanco (se llenará a medida que se asignen tablas).
+    print(GameService(cols, Settings.from_env()).rebuild_active_json()["message"])
+    print("Estado final:", resumen_actual(cols))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

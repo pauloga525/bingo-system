@@ -1,0 +1,9 @@
+-r requirements.txt
+pytest>=9
+pytest-cov>=7
+mongomock==4.3.0
+ruff>=0.17
+mypy>=2.4
+pip-audit>=2.9
+pre-commit>=4
+openpyxl>=3.1
