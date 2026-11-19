@@ -55,6 +55,8 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./pages/buscar-participante').then((m) => m.BuscarParticipante),
       },
+      // Alumnos del curso asignado al animador
+      { path: 'mi-curso', loadComponent: () => import('./pages/mi-curso').then((m) => m.MiCurso) },
       // Solo administrador
       {
         path: 'reportes',

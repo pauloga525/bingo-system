@@ -16,7 +16,7 @@ from bson import ObjectId
 from ..db import Collections, Doc
 from ..errors import ApiError, Conflict, NotFound
 from ..utils import require_object_id, safe_int, set_or_unset
-from .animators import validate_domain_email
+from .animators import Course, student_course_query, validate_domain_email
 
 # campo de la API -> campo en Mongo
 FIELD_MAP: dict[str, str] = {
@@ -29,6 +29,7 @@ FIELD_MAP: dict[str, str] = {
     "nivel": "Nivel",
     "paralelo": "Paralelo",
 }
+_COURSE_API_FIELDS = ("curso", "especialidad", "nivel", "paralelo")
 _REQUIRED = ("primer_apellido", "nombre", "cedula", "curso", "nivel", "paralelo")
 _UPPER = ("primer_apellido", "segundo_apellido", "nombre")
 MAX_PER_PAGE = 100
@@ -181,6 +182,42 @@ class StudentService:
 
     def delete(self, student_id: Any) -> None:
         doc = self.get(student_id)
+        self.cols.students.delete_one({"_id": doc["_id"]})
+
+    # ------------------------------------------------ alumnos de un curso
+    def in_course(self, course: Course, q: str = "") -> list[dict[str, Any]]:
+        """Alumnos del curso del animador, ordenados por apellidos."""
+        query: dict[str, Any] = student_course_query(course)
+        if q:
+            pattern = {"$regex": re.escape(q), "$options": "i"}
+            fields = ("Num documento", "Primer Apellido", "Segundo Apellido", "Nombre", "correo")
+            query = {"$and": [query, {"$or": [{f: pattern} for f in fields]}]}
+        docs = self.cols.students.find(query).sort([("Primer Apellido", 1), ("Segundo Apellido", 1), ("Nombre", 1)])
+        return [serialize_student(d) for d in docs]
+
+    def get_in_course(self, student_id: Any, course: Course) -> Doc:
+        oid = require_object_id(student_id, "ID de estudiante inválido.")
+        doc = self.cols.students.find_one({"_id": oid, **student_course_query(course)})
+        if not doc:
+            raise NotFound("El estudiante no pertenece a su curso.")
+        return doc
+
+    @staticmethod
+    def _with_course(data: dict[str, Any], course: Course) -> dict[str, Any]:
+        """Datos del cliente con el curso forzado al del animador (no puede moverlos de curso)."""
+        clean = {k: v for k, v in data.items() if k not in _COURSE_API_FIELDS}
+        return {**clean, **{k: course[k] for k in _COURSE_API_FIELDS}}
+
+    def create_in_course(self, data: dict[str, Any], course: Course) -> dict[str, Any]:
+        return self.create(self._with_course(data, course))
+
+    def update_in_course(self, student_id: Any, data: dict[str, Any], course: Course) -> dict[str, Any]:
+        doc = self.get_in_course(student_id, course)
+        clean = {k: v for k, v in data.items() if k not in _COURSE_API_FIELDS}
+        return self.update(doc["_id"], clean)
+
+    def delete_in_course(self, student_id: Any, course: Course) -> None:
+        doc = self.get_in_course(student_id, course)
         self.cols.students.delete_one({"_id": doc["_id"]})
 
     def tables_of(self, doc: Doc) -> list[Doc]:

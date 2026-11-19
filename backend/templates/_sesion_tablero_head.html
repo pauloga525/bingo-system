@@ -1,0 +1,13 @@
+{# Si la sesión del tablero vence (401), vuelve al login. Va en <head>, antes de cualquier fetch. #}
+<script>
+  (function () {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async function (...args) {
+      const resp = await originalFetch(...args);
+      if (resp.status === 401) {
+        window.location.href = '/tablero/login?next=' + encodeURIComponent(window.location.pathname);
+      }
+      return resp;
+    };
+  })();
+</script>

@@ -64,7 +64,8 @@ def test_create_animator_validations(admin: FlaskClient) -> None:
     # Sin correo se crea igual (aún no podrá iniciar sesión) y el usuario no choca con otro igual.
     sin_correo = {k: v for k, v in NUEVO.items() if k != "correo"}
     assert admin.post("/api/animadores", json=sin_correo).json["animador"]["usuario"] == "CSDA"
-    otro = admin.post("/api/animadores", json=sin_correo).json["animador"]
+    # Mismo nombre en otro curso (un curso solo admite un animador).
+    otro = admin.post("/api/animadores", json={**sin_correo, "paralelo": "C"}).json["animador"]
     assert (otro["usuario"], otro["correo"]) == ("CSDA2", "")
 
 

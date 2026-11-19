@@ -18,7 +18,13 @@ from bingo.services.game import GameService
 from bingo.services.pdf_extract import extraer_matrices_pdf
 from bingo.services.pdf_render import render_cards_pdf
 
-from .conftest import Seed, register
+from .conftest import Seed, board_login, register
+
+
+@pytest.fixture(autouse=True)
+def _tablero_admin(client: FlaskClient, cols: Collections) -> None:
+    """Todas las pruebas del juego corren con la sesión del tablero de un administrador."""
+    assert board_login(client, cols).status_code == 200
 
 
 def _numbers(cols: Collections, serial: str) -> list[int]:

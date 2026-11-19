@@ -118,20 +118,21 @@ def seed(cols: Collections, client: FlaskClient) -> Seed:
         }
 
     seed = Seed(
-        admin=_user(cols, "ADM", 0),
+        admin=ensure_admin(cols),
         ana=_user(cols, "ANA", 1, **reserva(1, 10)),
         beto=_user(cols, "BETO", 1, **reserva(11, 20)),
         tables=tables,
     )
     # Animadores con correo (así inician sesión con Google), enlazados a su cuenta de Users.
-    for usuario, oid in (("ANA", seed.ana), ("BETO", seed.beto)):
+    # Cada uno con su propio curso (un curso = un animador): ANA en 1° A, BETO en 1° B.
+    for usuario, oid, paralelo in (("ANA", seed.ana, "A"), ("BETO", seed.beto, "B")):
         cols.animators.insert_one(
             {
                 "profesor": f"Nombre {usuario}",
                 "curso": "BACHILLERATO",
                 "especialidad": "Ciencias",
                 "nivel": 1,
-                "paralelo": "A",
+                "paralelo": paralelo,
                 "correo": f"{usuario.lower()}@uets.edu.ec",
                 "usuario_id": oid,
             }
@@ -157,6 +158,18 @@ def login_as(client: FlaskClient, who: str) -> str:
     token: str = resp.json["token"]
     client.environ_base["HTTP_AUTHORIZATION"] = f"Bearer {token}"
     return token
+
+
+def ensure_admin(cols: Collections) -> ObjectId:
+    """Cuenta ``ADM`` del administrador (la crea si no existe)."""
+    admin = cols.users.find_one({"usuario": "ADM"})
+    return admin["_id"] if admin else _user(cols, "ADM", 0)
+
+
+def board_login(client: FlaskClient, cols: Collections, email: str = "admin@uets.edu.ec") -> Any:
+    """Abre la sesión del tablero del juego (cookie) con el login de Google del tablero."""
+    ensure_admin(cols)
+    return client.post("/tablero/login", json={"credential": email})
 
 
 def logout(client: FlaskClient) -> None:

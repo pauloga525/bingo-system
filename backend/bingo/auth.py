@@ -24,6 +24,7 @@ import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import wraps
 from typing import Any, TypeVar, cast
 
@@ -103,6 +104,14 @@ def init_auth(app: Flask, settings: Settings, verifier: GoogleVerifier | None = 
     app.extensions[_SERIALIZER_KEY] = URLSafeTimedSerializer(secret, salt=_SALT)
     app.extensions[_REGISTRATION_KEY] = URLSafeTimedSerializer(secret, salt="bingo-registro")
     app.extensions[_VERIFIER_KEY] = verifier or _google_verifier
+    # Cookie de sesión del tablero del juego (páginas servidas por Flask).
+    app.secret_key = secret
+    app.config.update(
+        SESSION_COOKIE_NAME="bingo_tablero",
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=settings.session_hours),
+    )
     app.before_request(_guard)
 
 
@@ -200,6 +209,11 @@ def _identity_from_request() -> Identity:
     scheme, _, token = header.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise Unauthorized("Debe iniciar sesión.")
+    return identity_from_token(token)
+
+
+def identity_from_token(token: str) -> Identity:
+    """Identidad de un token de sesión del panel (firma, caducidad y acceso vigente)."""
     try:
         data = _serializer().loads(token, max_age=_settings().session_hours * 3600)
     except SignatureExpired as exc:

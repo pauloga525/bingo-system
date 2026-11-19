@@ -12,7 +12,7 @@ from .auth import GoogleVerifier, init_auth
 from .config import BASE_DIR, Settings
 from .db import Doc, ensure_indexes, init_db
 from .errors import register_error_handlers
-from .routes import admin, auth, consulta, game, participants, tables, users
+from .routes import admin, auth, board, consulta, game, mi_curso, participants, tables, users
 
 
 def create_app(
@@ -39,7 +39,7 @@ def create_app(
     CORS(app, resources={r"/api/*": {"origins": settings.cors_origin_list}})
     register_error_handlers(app)
     init_auth(app, settings, google_verifier)
-    for module in (auth, consulta, admin, game, participants, tables, users):
+    for module in (auth, consulta, admin, mi_curso, board, game, participants, tables, users):
         app.register_blueprint(module.bp)
     app.after_request(_security_headers)
     return app

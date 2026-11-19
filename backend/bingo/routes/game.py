@@ -15,6 +15,7 @@ from ..errors import ApiError
 from ..services.game import GameService
 from ..services.pdf_extract import extraer_matrices_pdf
 from ..utils import json_body, safe_int, stringify_keys
+from .board import require_board_admin
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("game", __name__)
@@ -23,6 +24,10 @@ PDF_MAGIC = b"%PDF-"
 
 def _game() -> GameService:
     return GameService(get_db(), current_app.config["SETTINGS"])
+
+
+# El tablero y sus endpoints son solo para el administrador (sesión del tablero).
+bp.before_request(require_board_admin)
 
 
 @bp.get("/")

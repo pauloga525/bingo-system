@@ -21,14 +21,14 @@ Rutas completas: `C:\Users\USUARIO\Desktop\sistemas UETS\Desarrollos\...`
  Pantalla del juego ── Tablero ──┘
 ```
 
-El **tablero** lo sirve el servidor Python; no necesita el panel ni iniciar sesión.
+El **tablero** lo sirve el servidor Python y **solo lo puede abrir el administrador** (sección 4).
 
 ---
 
 ## 2. Instalación (solo la primera vez en una computadora)
 
 ### 2.1 Servidor Python
-En PowerShell, dentro de `bingo-systemackend`:
+En PowerShell, dentro de `bingo-system\backend`:
 
 ```powershell
 python -m venv env
@@ -48,7 +48,7 @@ Abra `.env` con el Bloc de notas y revise:
 > El archivo `.env` tiene datos secretos: nunca lo suba a GitHub (ya está excluido).
 
 ### 2.2 Panel web
-Requiere Node.js 20.19 o superior. En PowerShell, dentro de `bingo-systemrontend`:
+Requiere Node.js 20.19 o superior. En PowerShell, dentro de `bingo-system\frontend`:
 
 ```powershell
 npm install
@@ -77,7 +77,7 @@ un error (`origin_mismatch`).
 
 1. **MongoDB**: normalmente arranca solo con Windows. Para comprobarlo:
    `Get-Service MongoDB` debe decir `Running` (si no: `Start-Service MongoDB` como administrador).
-2. **Servidor del juego**: en `bingo-systemackend`:
+2. **Servidor del juego**: en `bingo-system\backend`:
    ```powershell
    .\iniciar_servidor.ps1
    ```
@@ -90,7 +90,7 @@ un error (`origin_mismatch`).
    ```
    ⚠️ La línea `Serving on http://0.0.0.0:5000` **no** es una dirección para el navegador.
    Deje esta ventana abierta mientras dure el evento; para apagar, presione `Ctrl + C`.
-3. **Panel web** (para vender tablas / administrar): en `bingo-systemrontend`:
+3. **Panel web** (para vender tablas / administrar): en `bingo-system\frontend`:
    ```powershell
    npm start
    ```
@@ -102,8 +102,12 @@ Comprobación rápida: `http://localhost:5000/health` debe responder `{"database
 
 ## 4. El tablero del bingo (jugar)
 
-1. Con el servidor encendido, abra **`http://localhost:5000/`** en la computadora del proyector
-   (o `http://<IP-del-servidor>:5000/` desde otra computadora de la red).
+1. Abra el tablero **como administrador**, de una de estas dos formas:
+   - En el panel, botón **Tablero** (arriba a la derecha): se abre en otra pestaña con la sesión ya
+     iniciada.
+   - O directamente **`http://localhost:5000/`** (o `http://<IP-del-servidor>:5000/`): pide
+     **Acceder con Google** y solo deja pasar a los correos de `BINGO_ADMIN_EMAILS`. Para esto, agregue
+     también `http://localhost:5000` en los orígenes de Google (sección 2.3).
 2. Pulse **Empezar Juego** → se abre el **Tablero Maestro** (`/pages/masterTable.html`).
 3. Cada vez que sale una bola:
    - **Clic** sobre el número → lo marca (se pinta oscuro).
@@ -117,7 +121,9 @@ Comprobación rápida: `http://localhost:5000/health` debe responder `{"database
 vendieron tablas después de abrir el tablero, pulse **Nuevo Juego** (o reinicie el servidor) para
 incluirlas. Si el tablero no muestra tablas, todavía no hay ventas registradas.
 
-El tablero **no pide inicio de sesión**: úselo solo dentro de la red del colegio.
+**Acceso:** animadores, estudiantes o cualquier otra persona ven la pantalla de acceso y no pueden
+jugar, marcar bolas ni reiniciar la partida. El botón **Salir** (esquina superior derecha) cierra la
+sesión del tablero; la sesión también vence a las horas de `BINGO_SESSION_HOURS`.
 
 ---
 
@@ -128,7 +134,7 @@ Todos entran en el panel con **"Iniciar sesión con Google"** usando su cuenta `
 | Quién | Cómo obtiene acceso | Qué ve |
 | --- | --- | --- |
 | **Administrador** | `admin@uets.edu.ec` (variable `BINGO_ADMIN_EMAILS`) | Todo: participantes, tablas, reportes, **Animadores**, **Estudiantes**, reservar tablas |
-| **Animador** | El administrador le pone su correo en **Animadores** | Sus participantes y las tablas de su rango |
+| **Animador** | El administrador le pone su correo en **Animadores** | Sus participantes, las tablas de su rango y **Mi curso** (los alumnos de su paralelo) |
 | **Estudiante** | Se registra solo la primera vez (ver abajo) | Únicamente **Mis tablas** (con descarga en PDF) |
 | **Comprador externo** | No necesita cuenta | Página pública **`/consulta`**: escribe su cédula y ve/descarga sus tablas |
 
@@ -137,6 +143,28 @@ Todos entran en el panel con **"Iniciar sesión con Google"** usando su cuenta `
 2. Escriba su **correo institucional** y guarde. Desde ese momento puede entrar con Google.
 3. Para quitarle el acceso, borre el correo y guarde.
 4. **Nuevo animador** crea el animador y su cuenta de ventas a la vez.
+5. **Eliminar** (papelera) borra al animador, salvo que ya tenga participantes o tablas reservadas;
+   en ese caso quítele el correo.
+
+### 5.1.1 Asignar o reasignar el curso de un animador (administrador)
+**Regla:** cada curso (paralelo) tiene **un solo animador**, y cada animador **un solo curso**. El curso
+se identifica por curso + especialidad + nivel + paralelo (por ejemplo, 1° F1 de Ciencias y 2° F1 de
+Ciencias son cursos distintos).
+
+1. Panel → **Animadores** → **Editar** (lápiz) → lista **Curso (paralelo)**. Cada opción dice cuántos
+   alumnos tiene y si está **libre** u **ocupado por** otro animador.
+2. Si elige un curso libre, se asigna al guardar.
+3. Si elige un curso ocupado, el sistema pregunta si desea **reasignarlo**: al aceptar, el animador
+   anterior queda **Sin curso** (no pierde su correo, sus participantes ni sus tablas).
+4. **— Sin curso —** deja al animador sin paralelo.
+5. Arriba se indica cuántos cursos no tienen animador, y el filtro **Sin curso** muestra los animadores
+   pendientes de asignar.
+
+### 5.1.2 Mi curso (animador)
+El animador ve en **Mi curso** a los alumnos de su paralelo y puede **agregar**, **editar** (apellidos,
+nombres, cédula, correo) o **eliminar** alumnos. Solo puede tocar alumnos de su propio curso y no puede
+cambiarlos de curso; eso lo hace el administrador en **Estudiantes**. Si no tiene curso asignado, la
+página se lo indica.
 
 ### 5.2 Reservar tablas a un animador (administrador)
 Un animador solo puede vender las tablas de su rango reservado, y cada temporada las reservas
@@ -203,7 +231,7 @@ Temporada 2026 actual: 11 000 tablas (`upload\tablas 2026.pdf`), 4 195 estudiant
    ```
 3. Compile el panel y sírvalo (con `API_URL` vacío en `env.js` usa la misma IP, puerto 5000):
    ```powershell
-   # en bingo-systemrontend
+   # en bingo-system\frontend
    npm run build
    npx serve -s dist\gestor-usrs-bingo-angular\browser -l 3000
    ```
@@ -231,7 +259,7 @@ Temporada 2026 actual: 11 000 tablas (`upload\tablas 2026.pdf`), 4 195 estudiant
   3. Google Cloud Console: agregue `https://bingo.<dominio>` en *Orígenes autorizados de JavaScript*.
 
   Así los estudiantes y externos usan `https://bingo.<dominio>` (login y `/consulta`).
-  Mantenga el **tablero** (`/pages/masterTable.html`) solo en la red interna.
+  El **tablero** exige sesión de administrador, pero conviene usarlo dentro de la red interna.
 
 ### 7.3 Lista de control antes del evento
 - [ ] `Get-Service MongoDB` en `Running`

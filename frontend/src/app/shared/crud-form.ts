@@ -7,10 +7,17 @@ import { errorMessage } from '../core/http';
 export interface CrudField {
   name: string;
   label: string;
-  type?: 'text' | 'email' | 'number';
+  type?: 'text' | 'email' | 'number' | 'select';
   required?: boolean;
+  /** Opciones de una lista (type 'select'). */
+  options?: CrudOption[];
   placeholder?: string;
   wide?: boolean;
+}
+
+export interface CrudOption {
+  value: string;
+  label: string;
 }
 
 export type CrudValues = Record<string, unknown>;
@@ -37,14 +44,28 @@ export type CrudValues = Record<string, unknown>;
               @if (f.required) {
                 <span class="text-red-500"> *</span>
               }
-              <input
-                [type]="f.type || 'text'"
-                [required]="!!f.required"
-                [placeholder]="f.placeholder || ''"
-                [value]="valueOf(f.name)"
-                (input)="set(f.name, $event)"
-                class="mt-1 w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2"
-              />
+              @if (f.type === 'select') {
+                <select
+                  [required]="!!f.required"
+                  (change)="set(f.name, $event)"
+                  class="mt-1 w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2"
+                >
+                  @for (o of f.options || []; track o.value) {
+                    <option [value]="o.value" [selected]="o.value === valueOf(f.name)">
+                      {{ o.label }}
+                    </option>
+                  }
+                </select>
+              } @else {
+                <input
+                  [type]="f.type || 'text'"
+                  [required]="!!f.required"
+                  [placeholder]="f.placeholder || ''"
+                  [value]="valueOf(f.name)"
+                  (input)="set(f.name, $event)"
+                  class="mt-1 w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2"
+                />
+              }
             </label>
           }
         </div>
@@ -94,7 +115,7 @@ export class CrudForm implements OnInit {
   }
 
   protected set(name: string, event: Event): void {
-    const value = (event.target as HTMLInputElement).value;
+    const value = (event.target as HTMLInputElement | HTMLSelectElement).value;
     this.values.update((v) => ({ ...v, [name]: value }));
   }
 

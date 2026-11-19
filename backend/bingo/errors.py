@@ -42,8 +42,9 @@ class Forbidden(ApiError):
 
 
 class Conflict(ApiError):
-    def __init__(self, message: str) -> None:
-        super().__init__(message, 409)
+    def __init__(self, message: str, **extra: Any) -> None:
+        """``extra`` se agrega al cuerpo JSON (p. ej. datos para que el cliente ofrezca reasignar)."""
+        super().__init__(message, 409, {"success": False, "message": message, **extra} if extra else None)
 
 
 def register_error_handlers(app: Flask) -> None:

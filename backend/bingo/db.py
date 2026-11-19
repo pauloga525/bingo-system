@@ -71,6 +71,12 @@ _INDEXES: tuple[tuple[str, list[tuple[str, int]], dict[str, Any]], ...] = (
     ("participants", [("tablas", ASCENDING)], {"name": "tablas"}),
     ("users", [("usuario", ASCENDING)], {"name": "usuario"}),
     ("animators", [("correo", ASCENDING)], {"name": "correo"}),
+    # Un curso (paralelo) solo puede tener un animador.
+    (
+        "animators",
+        [("curso", ASCENDING), ("especialidad", ASCENDING), ("nivel", ASCENDING), ("paralelo", ASCENDING)],
+        {"unique": True, "name": "curso_unico", "partialFilterExpression": {"curso": {"$exists": True}}},
+    ),
     ("students", [("correo", ASCENDING)], {"name": "correo"}),
     ("students", [("Num documento", ASCENDING)], {"name": "num_documento"}),
     ("winners", [("serial", ASCENDING)], {"unique": True, "name": "serial_unique"}),

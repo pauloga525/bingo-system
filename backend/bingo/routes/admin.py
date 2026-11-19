@@ -42,17 +42,27 @@ def obtener_animador(animador_id: str) -> Response:
     return jsonify({"success": True, "animador": svc.serialize(svc.get(animador_id))})
 
 
+@bp.get("/cursos")
+@require_admin
+def listar_cursos() -> Response:
+    """Cursos (paralelos) con su número de alumnos y el animador asignado, si tiene."""
+    cursos = _animators().courses()
+    return jsonify({"success": True, "cursos": cursos, "total": len(cursos)})
+
+
 @bp.post("/animadores")
 @require_admin
 def crear_animador() -> tuple[Response, int]:
-    animador = _animators().create(json_body())
+    data = json_body()
+    animador = _animators().create(data, reassign=bool(data.get("reasignar")))
     return jsonify({"success": True, "message": "Animador creado.", "animador": animador}), 201
 
 
 @bp.put("/animadores/<animador_id>")
 @require_admin
 def actualizar_animador(animador_id: str) -> Response:
-    animador = _animators().update(animador_id, json_body())
+    data = json_body()
+    animador = _animators().update(animador_id, data, reassign=bool(data.get("reasignar")))
     return jsonify({"success": True, "message": "Animador actualizado.", "animador": animador})
 
 
