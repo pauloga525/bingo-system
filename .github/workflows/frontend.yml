@@ -8,7 +8,8 @@ name: Frontend (CI/CD)
 #   Variables: API_URL        (obligatoria, dirección HTTPS del servidor Python)
 #              FTP_SERVER_DIR (opcional; por defecto public_html/website_9a02b4bd/, carpeta del panel
 #                              en HostGator vista desde la cuenta FTP principal)
-#              GOOGLE_CLIENT_ID, FRONTEND_BASE_HREF, FTP_PROTOCOL, FTP_PORT, FTP_SECURITY (opcionales)
+#              GOOGLE_CLIENT_ID, FRONTEND_BASE_HREF, FTP_PORT (opcionales)
+#   FTP_SERVER es el nombre del servidor de HostGator (gatorNNNN.hostgator.com), no el dominio.
 on:
   push:
     branches: [main]
@@ -119,14 +120,43 @@ jobs:
             console.log("API_URL =", env.API_URL);
           '
 
-      - name: Subir por FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ${{ vars.FTP_PROTOCOL || 'ftps' }}
-          port: ${{ vars.FTP_PORT || 21 }}
-          security: ${{ vars.FTP_SECURITY || 'strict' }}
-          local-dir: ./panel/
-          server-dir: ${{ env.DEPLOY_DIR }}
+      # lftp en lugar de FTP-Deploy-Action: esa acción corta el canal de datos TLS con el
+      # Pure-FTPd de HostGator ("tlsv1 alert decode error"). Siempre FTPS con certificado
+      # verificado: FTP_SERVER debe ser el nombre del servidor (gatorNNNN.hostgator.com),
+      # porque el certificado del FTP de HostGator es *.hostgator.com.
+      - name: Subir por FTPS (lftp)
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          LFTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_PORT: ${{ vars.FTP_PORT || '21' }}
+        run: |
+          sudo apt-get install -y -qq lftp > /dev/null
+          host="${FTP_SERVER#ftp://}"; host="${host#ftps://}"; host="${host%%/*}"; host="${host%%:*}"
+          case "$host" in
+            *.hostgator.com) ;;
+            *) echo "::warning::FTP_SERVER no termina en .hostgator.com; el certificado probablemente no coincidirá (use gatorNNNN.hostgator.com, ver cPanel → Nombre del servidor)" ;;
+          esac
+          echo "Subiendo a $host:$FTP_PORT → $DEPLOY_DIR (FTPS, certificado verificado)"
+          cd panel
+          # Orden: primero todo menos index.html; luego index.html (así nunca apunta a archivos
+          # que aún no subieron); al final se borran los .js/.css de versiones anteriores.
+          lftp -u "$FTP_USERNAME" --env-password -p "$FTP_PORT" "$host" <<EOF
+          set cmd:fail-exit true
+          set ftp:ssl-allow true
+          set ftp:ssl-force true
+          set ftp:ssl-protect-data true
+          set ssl:verify-certificate true
+          set ftp:passive-mode true
+          set net:timeout 30
+          set net:max-retries 8
+          set net:reconnect-interval-base 5
+          set net:reconnect-interval-max 30
+          set mirror:parallel-transfer-count 6
+          mkdir -p -f "$DEPLOY_DIR"
+          cd "$DEPLOY_DIR"
+          mirror -R --no-perms --verbose=1 --exclude-glob index.html . .
+          put index.html
+          mirror -R --no-perms --verbose=1 --delete --include-glob chunk-*.js --include-glob main-*.js --include-glob polyfills-*.js --include-glob styles-*.css . .
+          bye
+          EOF

@@ -37,8 +37,9 @@ cambia algo en `frontend/`:
 
 - **CI** (también en pull requests): `npm ci`, revisión de formato con Prettier y compilación.
 - **CD** (solo al llegar a `main`, o a mano con *Run workflow*): genera `env.js` de producción y sube
-  la carpeta compilada a HostGator por FTP. Solo se suben los archivos que cambiaron y se borran los
-  que ya no existen en el compilado. Los demás archivos de la carpeta no se tocan.
+  la carpeta compilada a HostGator por **FTPS con `lftp`** (cifrado y con el certificado verificado).
+  Solo se suben los archivos que cambiaron. `index.html` se sube al final y después se borran los
+  `.js`/`.css` de versiones anteriores; los demás archivos de la carpeta no se tocan.
 
 El backend tiene su propio workflow (`backend.yml`), que solo ejecuta pruebas y no se despliega.
 
@@ -55,15 +56,14 @@ El panel se publica en **<https://consultas.uets.edu.ec/>** (raíz del subdomini
 
    | Tipo | Nombre | Valor |
    | --- | --- | --- |
-   | Secret | `FTP_SERVER` | Servidor FTP de HostGator (p. ej. `ftp.midominio.com`) |
+   | Secret | `FTP_SERVER` | **Nombre del servidor** de HostGator, `gatorNNNN.hostgator.com` (cPanel → Información general → Nombre del servidor). No use `uets.edu.ec` ni `ftp.uets.edu.ec`: el certificado del FTP es `*.hostgator.com` y la conexión se rechaza |
    | Secret | `FTP_USERNAME` | Usuario de la cuenta FTP |
    | Secret | `FTP_PASSWORD` | Contraseña de la cuenta FTP |
    | Variable (opcional) | `FTP_SERVER_DIR` | Carpeta de destino **vista desde la cuenta FTP**, terminada en `/`. Por defecto `public_html/website_9a02b4bd/` (la carpeta del panel en HostGator, vista desde la cuenta FTP principal). Si usa una cuenta FTP limitada a esa carpeta, ponga `./` |
    | Variable | `API_URL` | Dirección **HTTPS** del servidor Python (p. ej. `https://api-bingo.midominio.com`) |
    | Variable (opcional) | `FRONTEND_BASE_HREF` | `/` por defecto (correcto para `consultas.uets.edu.ec`); solo cambia si el panel se mueve a una subcarpeta, p. ej. `/bingo/` |
    | Variable (opcional) | `GOOGLE_CLIENT_ID` | Solo si cambia el cliente de Google (por defecto, el de `public/env.js`) |
-   | Variable (opcional) | `FTP_PROTOCOL` / `FTP_PORT` | Por defecto `ftps` y `21` |
-   | Variable (opcional) | `FTP_SECURITY` | `strict` por defecto; ponga `loose` solo si falla por el certificado del FTP |
+   | Variable (opcional) | `FTP_PORT` | Por defecto `21` |
 
    Las contraseñas van en **Secrets**: GitHub las oculta en los registros y nadie puede leerlas
    después de guardarlas.
