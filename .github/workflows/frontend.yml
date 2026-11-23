@@ -1,0 +1,132 @@
+name: Frontend (CI/CD)
+
+# CI: en cada cambio de frontend/ revisa el formato y compila el panel.
+# CD: al llegar a main, sube el panel compilado a HostGator por FTP.
+#
+# Configuración (GitHub → Settings → Secrets and variables → Actions):
+#   Secrets:   FTP_SERVER, FTP_USERNAME, FTP_PASSWORD
+#   Variables: API_URL        (obligatoria, dirección HTTPS del servidor Python)
+#              FTP_SERVER_DIR (opcional; por defecto public_html/website_9a02b4bd/, carpeta del panel
+#                              en HostGator vista desde la cuenta FTP principal)
+#              GOOGLE_CLIENT_ID, FRONTEND_BASE_HREF, FTP_PROTOCOL, FTP_PORT, FTP_SECURITY (opcionales)
+on:
+  push:
+    branches: [main]
+    paths: ["frontend/**", ".github/workflows/frontend.yml"]
+  pull_request:
+    paths: ["frontend/**", ".github/workflows/frontend.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un despliegue a la vez; uno nuevo espera a que termine el anterior.
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Compilar panel
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Formato (prettier)
+        run: npx prettier --check src
+      - name: Compilar
+        env:
+          # "/" si el panel va en la raíz del dominio; "/bingo/" si va en una subcarpeta.
+          BASE_HREF: ${{ vars.FRONTEND_BASE_HREF || '/' }}
+        run: npx ng build --base-href "$BASE_HREF"
+      - name: Guardar el compilado
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-compilado
+          path: frontend/dist/gestor-usrs-bingo-angular/browser/
+          include-hidden-files: true # incluye .htaccess
+          retention-days: 7
+
+  deploy:
+    name: Desplegar en HostGator
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: hostgator
+    env:
+      # Carpeta del panel en HostGator, relativa a la raíz de la cuenta FTP (termina en "/").
+      DEPLOY_DIR: ${{ vars.FTP_SERVER_DIR || 'public_html/website_9a02b4bd/' }}
+    steps:
+      - name: Descargar el compilado
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-compilado
+          path: panel
+
+      - name: Revisar configuración
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          API_URL: ${{ vars.API_URL }}
+        run: |
+          faltan=""
+          for v in FTP_SERVER FTP_USERNAME FTP_PASSWORD API_URL; do
+            [ -n "${!v}" ] || faltan="$faltan $v"
+          done
+          if [ -n "$faltan" ]; then
+            echo "::error::Falta configurar en GitHub:$faltan (ver frontend/README.md, sección Despliegue)"
+            exit 1
+          fi
+          echo "Destino: $DEPLOY_DIR"
+          case "$DEPLOY_DIR" in
+            */) ;;
+            *) echo "::error::FTP_SERVER_DIR debe terminar en '/' (p. ej. public_html/)"; exit 1 ;;
+          esac
+          case "$API_URL" in
+            https://*) ;;
+            *) echo "::error::API_URL debe empezar con https:// (el panel en HostGator usa HTTPS)"; exit 1 ;;
+          esac
+
+      - name: Generar env.js de producción
+        env:
+          API_URL: ${{ vars.API_URL }}
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const actual = fs.readFileSync("panel/env.js", "utf8");
+            const idActual = (actual.match(/GOOGLE_CLIENT_ID:\s*["\x27]([^"\x27]+)/) || [])[1] || "";
+            const env = {
+              API_URL: process.env.API_URL.trim().replace(/\/+$/, ""),
+              GOOGLE_CLIENT_ID: (process.env.GOOGLE_CLIENT_ID || idActual).trim(),
+            };
+            fs.writeFileSync(
+              "panel/env.js",
+              "// Generado por GitHub Actions al desplegar. Se puede editar en el servidor.\n" +
+                "window.__env = " + JSON.stringify(env, null, 2) + ";\n",
+            );
+            console.log("API_URL =", env.API_URL);
+          '
+
+      - name: Subir por FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ${{ vars.FTP_PROTOCOL || 'ftps' }}
+          port: ${{ vars.FTP_PORT || 21 }}
+          security: ${{ vars.FTP_SECURITY || 'strict' }}
+          local-dir: ./panel/
+          server-dir: ${{ env.DEPLOY_DIR }}

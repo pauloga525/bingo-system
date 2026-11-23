@@ -1,0 +1,26 @@
+# Panel Bingo UETS en Apache (HostGator).
+
+# Rutas del panel (/login, /admin/animadores, /consulta...): si no es un archivo real,
+# se entrega index.html y Angular muestra la página. Funciona también en una subcarpeta.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# index.html y env.js siempre frescos (así un despliegue nuevo se ve de inmediato).
+# Los .js/.css compilados llevan un hash en el nombre y se pueden guardar en caché.
+<IfModule mod_headers.c>
+  <FilesMatch "^(index\.html|env\.js)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+  </FilesMatch>
+  <FilesMatch "-[0-9A-Z]{8}\.(js|css)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+Options -Indexes

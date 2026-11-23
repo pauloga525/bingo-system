@@ -30,6 +30,62 @@ Se lee al cargar la página, así que se puede editar después de compilar
 La dirección desde la que se abre el panel (p. ej. `http://localhost:3000`) debe estar en
 *Orígenes autorizados de JavaScript* del cliente OAuth en Google Cloud Console.
 
+## CI/CD y despliegue en HostGator
+
+El workflow [`.github/workflows/frontend.yml`](../.github/workflows/frontend.yml) se ejecuta cuando
+cambia algo en `frontend/`:
+
+- **CI** (también en pull requests): `npm ci`, revisión de formato con Prettier y compilación.
+- **CD** (solo al llegar a `main`, o a mano con *Run workflow*): genera `env.js` de producción y sube
+  la carpeta compilada a HostGator por FTP. Solo se suben los archivos que cambiaron y se borran los
+  que ya no existen en el compilado. Los demás archivos de la carpeta no se tocan.
+
+El backend tiene su propio workflow (`backend.yml`), que solo ejecuta pruebas y no se despliega.
+
+### Configuración (una sola vez)
+
+El panel se publica en **<https://consultas.uets.edu.ec/>** (raíz del subdominio, así que
+`FRONTEND_BASE_HREF` se deja en `/`).
+
+1. **HostGator:** ese subdominio abre la carpeta `public_html/website_9a02b4bd` de la cuenta.
+   Lo más seguro es crear en cPanel → Cuentas FTP una cuenta limitada a esa carpeta (y poner
+   `FTP_SERVER_DIR` = `./`), así el despliegue no puede tocar el resto del sitio. Con la cuenta FTP
+   principal no hace falta configurar la carpeta.
+2. **GitHub → repositorio → Settings → Secrets and variables → Actions:**
+
+   | Tipo | Nombre | Valor |
+   | --- | --- | --- |
+   | Secret | `FTP_SERVER` | Servidor FTP de HostGator (p. ej. `ftp.midominio.com`) |
+   | Secret | `FTP_USERNAME` | Usuario de la cuenta FTP |
+   | Secret | `FTP_PASSWORD` | Contraseña de la cuenta FTP |
+   | Variable (opcional) | `FTP_SERVER_DIR` | Carpeta de destino **vista desde la cuenta FTP**, terminada en `/`. Por defecto `public_html/website_9a02b4bd/` (la carpeta del panel en HostGator, vista desde la cuenta FTP principal). Si usa una cuenta FTP limitada a esa carpeta, ponga `./` |
+   | Variable | `API_URL` | Dirección **HTTPS** del servidor Python (p. ej. `https://api-bingo.midominio.com`) |
+   | Variable (opcional) | `FRONTEND_BASE_HREF` | `/` por defecto (correcto para `consultas.uets.edu.ec`); solo cambia si el panel se mueve a una subcarpeta, p. ej. `/bingo/` |
+   | Variable (opcional) | `GOOGLE_CLIENT_ID` | Solo si cambia el cliente de Google (por defecto, el de `public/env.js`) |
+   | Variable (opcional) | `FTP_PROTOCOL` / `FTP_PORT` | Por defecto `ftps` y `21` |
+   | Variable (opcional) | `FTP_SECURITY` | `strict` por defecto; ponga `loose` solo si falla por el certificado del FTP |
+
+   Las contraseñas van en **Secrets**: GitHub las oculta en los registros y nadie puede leerlas
+   después de guardarlas.
+3. **Servidor Python:** en su `.env`, ponga `CORS_ORIGINS=https://consultas.uets.edu.ec` (separe con
+   comas si el panel también se abre desde otra dirección, p. ej. `http://localhost:3000`) y
+   reinicie el servidor.
+4. **Google Cloud Console:** agregue `https://consultas.uets.edu.ec` en *Orígenes autorizados de
+   JavaScript* (sin barra al final).
+
+El despliegue usa el *environment* `hostgator` de GitHub. Si quiere aprobar cada despliegue a mano,
+active *Required reviewers* en Settings → Environments → hostgator.
+
+> **HTTPS:** HostGator sirve el panel con HTTPS, así que el navegador solo le permite hablar con un API
+> en HTTPS. `http://IP:5000` no funcionará desde ahí. Publique el servidor Python con Cloudflare
+> Tunnel (ver el manual, sección 7.2).
+
+El archivo `public/.htaccess` (va dentro del compilado) hace que las rutas del panel funcionen al
+recargar la página en Apache y evita que el navegador guarde en caché `index.html` y `env.js`.
+
+**Despliegue manual** (sin GitHub): `npm run build`, edite `dist/gestor-usrs-bingo-angular/browser/env.js`
+y suba el contenido de esa carpeta, incluido `.htaccess`, con el Administrador de archivos de cPanel.
+
 ## Rutas
 
 | Ruta | Quién |
@@ -39,6 +95,7 @@ La dirección desde la que se abre el panel (p. ej. `http://localhost:3000`) deb
 | `/mis-tablas` | Estudiantes |
 | `/admin/users`, `/admin/add-user`, `/admin/user/:id/cartones`, `/admin/user/:id/add-carton` | Admin y animadores |
 | `/admin/cartones`, `/admin/cartones/:id`, `/admin/buscar-participante` | Admin y animadores |
+| `/admin/mi-curso` | Animadores (alumnos de su paralelo) |
 | `/admin/reportes`, `/admin/animadores`, `/admin/estudiantes` | Solo admin |
 
 ## Estructura

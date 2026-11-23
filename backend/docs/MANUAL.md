@@ -261,6 +261,13 @@ Temporada 2026 actual: 11 000 tablas (`upload\tablas 2026.pdf`), 4 195 estudiant
   Así los estudiantes y externos usan `https://bingo.<dominio>` (login y `/consulta`).
   El **tablero** exige sesión de administrador, pero conviene usarlo dentro de la red interna.
 
+- **Panel en HostGator (despliegue automático)**: el panel se publica en
+  **<https://consultas.uets.edu.ec/>** (HostGator) en lugar de servirlo desde esta computadora. Cada cambio en `frontend/` que llega a la rama `main` de GitHub se
+  compila y se sube solo por FTP. En ese caso el túnel solo necesita el subdominio del API
+  (`api-bingo.<dominio>` → `http://localhost:5000`). Los pasos 2 y 3 de arriba se hacen con la
+  dirección de HostGator, y el paso 1 lo hace GitHub con la variable `API_URL`. La configuración está
+  en `frontend/README.md`, sección *CI/CD y despliegue en HostGator*.
+
 ### 7.3 Lista de control antes del evento
 - [ ] `Get-Service MongoDB` en `Running`
 - [ ] `.env` del servidor con `BINGO_SECRET_KEY` y `GOOGLE_CLIENT_ID`
