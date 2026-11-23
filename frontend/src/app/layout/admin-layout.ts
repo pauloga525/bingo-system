@@ -95,6 +95,7 @@ export class AdminLayout {
           { path: '/admin/reportes', label: 'Reportes' },
           { path: '/admin/animadores', label: 'Animadores' },
           { path: '/admin/estudiantes', label: 'Estudiantes' },
+          { path: '/admin/mantenimiento', label: 'Mantenimiento' },
         ]
       : []),
   ]);

@@ -101,7 +101,7 @@ y suba el contenido de esa carpeta, incluidos `.htaccess` y `bingo-panel.txt`, c
 | `/admin/users`, `/admin/add-user`, `/admin/user/:id/cartones`, `/admin/user/:id/add-carton` | Admin y animadores |
 | `/admin/cartones`, `/admin/cartones/:id`, `/admin/buscar-participante` | Admin y animadores |
 | `/admin/mi-curso` | Animadores (alumnos de su paralelo) |
-| `/admin/reportes`, `/admin/animadores`, `/admin/estudiantes` | Solo admin |
+| `/admin/reportes`, `/admin/animadores`, `/admin/estudiantes`, `/admin/mantenimiento` | Solo admin |
 
 ## Estructura
 - `src/app/core/`: configuración, sesión (`localStorage`), interceptor HTTP (URL base, token,

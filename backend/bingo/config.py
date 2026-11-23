@@ -42,6 +42,8 @@ class Settings:
     json_dir: Path = BASE_DIR / "jsons"
     winners_dir: Path = BASE_DIR / "winners"
     upload_dir: Path = BASE_DIR / "upload"
+    # Respaldos JSON que genera el servidor antes de borrados masivos (datos personales: no versionar).
+    backup_dir: Path = BASE_DIR / "backups"
     cors_origins: str = "*"
     # Escucha en toda la red porque el frontend y la mesa de juego están en otros equipos.
     # Usa FLASK_HOST=127.0.0.1 si solo se accede desde esta máquina.
@@ -82,6 +84,7 @@ class Settings:
             json_dir=_env_path("BINGO_JSON_DIR", BASE_DIR / "jsons"),
             winners_dir=_env_path("BINGO_WINNERS_DIR", BASE_DIR / "winners"),
             upload_dir=_env_path("BINGO_UPLOAD_DIR", BASE_DIR / "upload"),
+            backup_dir=_env_path("BINGO_BACKUP_DIR", BASE_DIR / "backups"),
             cors_origins=os.environ.get("CORS_ORIGINS", cls.cors_origins),
             host=os.environ.get("FLASK_HOST", cls.host),
             port=_env_int("FLASK_PORT", cls.port),

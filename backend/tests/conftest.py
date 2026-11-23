@@ -41,6 +41,7 @@ def settings(tmp_path: Path) -> Settings:
         json_dir=tmp_path / "jsons",
         winners_dir=tmp_path / "winners",
         upload_dir=tmp_path / "upload",
+        backup_dir=tmp_path / "backups",
         debug=False,
         google_client_id="test-client-id",
         secret_key="clave-de-pruebas",

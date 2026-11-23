@@ -115,7 +115,8 @@ Comprobación rápida: `http://localhost:5000/health` debe responder `{"database
 4. A la derecha, **Progreso de Tablas** muestra las 3 tablas con más aciertos.
 5. **Gana la tabla llena** (25 aciertos). Aparece como **(GANADOR)**, se guarda en la base y se genera su
    comprobante PDF en `backend\winners\ganador_<serial>.pdf`.
-6. **Nuevo Juego** reinicia la partida: limpia las bolas y deja fuera las tablas que ya ganaron.
+6. **Nuevo Juego** (en el tablero) reinicia la ronda: limpia las bolas y deja fuera las tablas que ya
+   ganaron. **No borra nada.** Para empezar todo desde cero con tablas nuevas, vea la sección 5.6.
 
 **¿Qué tablas juegan?** Solo las **asignadas a un participante** (vendidas) y que no han ganado. Si se
 vendieron tablas después de abrir el tablero, pulse **Nuevo Juego** (o reinicie el servidor) para
@@ -191,6 +192,90 @@ Solo los correos estudiantiles pueden registrarse; un correo de docente sin rol 
 
 ### 5.4 Consulta pública
 `http://<dirección-del-panel>/consulta` (o `/consulta?cedula=0102030405`). No requiere cuenta.
+
+### 5.5 Vaciar todos los participantes (administrador)
+Panel → **Mantenimiento** → *Vaciar todos los participantes*. Sirve, por ejemplo, para borrar
+registros de prueba antes del evento o para empezar de cero sin reiniciar toda la temporada.
+
+1. La página muestra cuántos participantes, tablas asignadas y vendedores hay.
+2. Escriba exactamente **`BORRAR PARTICIPANTES`**. El botón se activa solo entonces y pide una
+   última confirmación.
+3. Al confirmar:
+   - se borran **todos** los participantes (alumnos, docentes y externos) de todos los animadores;
+   - sus tablas quedan **libres** para volver a venderse;
+   - los contadores de ventas (tablas usadas y total vendido) de cada animador vuelven a cero.
+4. **No** se borran las reservas de tablas de los animadores, los estudiantes, los animadores ni el
+   historial de tablas ganadoras.
+
+Antes de borrar, el servidor guarda un respaldo en `backend\backups\participantes_<fecha>.json`, que
+contiene cédulas y nombres: no lo comparta. Para restaurarlo:
+
+```powershell
+& "C:\Program Files\MongoDB\Tools\100\bin\mongoimport.exe" --db=bingo_db --collection=Participantes --file="backups\participantes_<fecha>.json"
+```
+
+Después de restaurar, las tablas siguen marcadas como libres. Si necesita el estado exacto anterior,
+use el respaldo completo con `mongodump` de la sección 6.
+
+Cada vaciado queda anotado en el registro del servidor con el correo del administrador.
+
+### 5.6 Nuevo juego desde cero (administrador)
+Panel → **Mantenimiento** → *Nuevo juego desde cero*. Deja el sistema como recién instalado para un
+juego nuevo, **conservando los estudiantes y los animadores** (con sus correos y cursos).
+
+1. La página muestra cuántas tablas, tablas asignadas, participantes y ganadoras hay ahora.
+2. En **¿Cuántas tablas nuevas desea generar?** escriba la cantidad (por defecto 11000). Debajo se ve
+   el rango de seriales que tendrán: `CARD00001` a `CARD<cantidad>`.
+3. Escriba exactamente **`NUEVO JUEGO`**. El botón se activa solo entonces y pide una última
+   confirmación con los números.
+4. Al confirmar, el servidor:
+   - genera las tablas nuevas y su PDF (si esto falla, **no se borra nada**);
+   - guarda un respaldo en `backend\backups\nuevo_juego_<fecha>\` con las tablas, ganadoras,
+     participantes y reservas que va a borrar;
+   - borra **todas** las tablas, las tablas ganadoras y **todos** los participantes con sus
+     asignaciones;
+   - pone en cero las reservas y los contadores de ventas de los animadores;
+   - guarda las tablas nuevas y deja el tablero sin cartones hasta que se vendan.
+5. El **PDF de las tablas nuevas se descarga solo** para imprimirlo. Si no aparece, use **Descargar
+   PDF de tablas**; el archivo también queda en el servidor, en `backend\upload\tablas_<fecha>.pdf`.
+
+Después hay que volver a **reservar tablas** a cada animador (sección 5.2). Con 11000 tablas el
+proceso tarda unos segundos. Cada reinicio queda anotado en el registro del servidor con el correo
+del administrador.
+
+> El respaldo contiene cédulas y nombres: no lo comparta. Para recuperar el estado anterior, restaure
+> las colecciones de esa carpeta con `mongoimport`, o mejor use el respaldo completo con `mongodump`
+> (sección 6), que conviene hacer antes de empezar un juego nuevo.
+
+### 5.7 Reemplazar los estudiantes con el Excel de secretaría (administrador)
+Panel → **Mantenimiento** → *Reemplazar estudiantes con el Excel de secretaría* (o **Estudiantes** →
+**Importar Excel**).
+
+**Plantilla:** el mismo Excel de alumnos de secretaría (p. ej. `Alumnos(2026-2027).xlsx`), en formato
+`.xlsx`, primera hoja, una fila por estudiante. Se leen solo las columnas **Nombre**, **Primer
+Apellido**, **Segundo Apellido**, **Curso** y **Num documento**. Los datos de padres, direcciones,
+teléfonos y la columna E-mail **no** se guardan. La columna **Curso** debe venir como en la plantilla
+(`EDUCACIÓN GENERAL BÁSICA Básica Media 7 A`, `BACHILLERATO Ciencias 2 BGUC F1`) y se separa en curso,
+especialidad, nivel y paralelo.
+
+1. Pulse **Elegir Excel (.xlsx)**. El servidor lo analiza **sin guardar nada** y muestra:
+   - estudiantes válidos, cursos y filas con problemas (con el detalle de cada fila, que no se
+     importará);
+   - cuántos estudiantes siguen, cuántos son nuevos y cuántos se eliminarán;
+   - cuántos correos ya registrados se conservan y cuántos se pierden (de alumnos que ya no están);
+   - los animadores cuyo curso quedaría sin alumnos (revise su curso en **Animadores**).
+2. Si hay **cédulas repetidas** en el Excel, no se puede importar: corríjalas y vuelva a elegirlo.
+3. Escriba exactamente **`REEMPLAZAR ESTUDIANTES`** y pulse **Reemplazar**.
+4. Se reemplazan **todos** los estudiantes por los del Excel. Cada estudiante que siga en el Excel
+   **conserva el correo** con el que ya se registró, así que puede seguir entrando a *Mis tablas*.
+
+No se tocan participantes, tablas ni animadores. Antes de reemplazar, el servidor guarda la lista
+anterior en `backend\backups\estudiantes_<fecha>.json` (contiene cédulas y nombres: no lo comparta).
+Para restaurarla:
+
+```powershell
+& "C:\Program Files\MongoDB\Tools\100\bin\mongoimport.exe" --db=bingo_db --collection=Estudiantes --drop --file="backups\estudiantes_<fecha>.json"
+```
 
 ---
 

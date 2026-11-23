@@ -1,7 +1,8 @@
 // CRUD de estudiantes (solo admin). Con el correo el estudiante puede ver sus tablas.
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
-import { Edit, LucideAngularModule, Plus, Search, Trash2 } from 'lucide-angular';
+import { RouterLink } from '@angular/router';
+import { Edit, FileSpreadsheet, LucideAngularModule, Plus, Search, Trash2 } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
 import { errorMessage } from '../core/http';
@@ -41,7 +42,7 @@ const PER_PAGE = 25;
 
 @Component({
   selector: 'app-estudiantes-admin',
-  imports: [LucideAngularModule, CrudForm],
+  imports: [LucideAngularModule, CrudForm, RouterLink],
   template: `
     <div class="p-6 max-w-6xl mx-auto">
       <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -49,13 +50,22 @@ const PER_PAGE = 25;
           <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Estudiantes</h1>
           <p class="text-sm text-gray-600 dark:text-gray-400">{{ total() }} encontrados</p>
         </div>
-        <button
-          type="button"
-          (click)="editing.set({})"
-          class="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
-        >
-          <lucide-icon [img]="PlusIcon" [size]="16" /> Nuevo estudiante
-        </button>
+        <div class="flex flex-wrap gap-2">
+          <a
+            routerLink="/admin/mantenimiento"
+            title="Reemplazar todos los estudiantes con el Excel de secretaría"
+            class="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 dark:text-white px-4 py-2 rounded-lg"
+          >
+            <lucide-icon [img]="ExcelIcon" [size]="16" /> Importar Excel
+          </a>
+          <button
+            type="button"
+            (click)="editing.set({})"
+            class="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
+          >
+            <lucide-icon [img]="PlusIcon" [size]="16" /> Nuevo estudiante
+          </button>
+        </div>
       </div>
 
       <form (submit)="$event.preventDefault(); buscar()" class="flex gap-2 mb-4">
@@ -167,6 +177,7 @@ const PER_PAGE = 25;
 export class EstudiantesAdmin implements OnInit {
   private readonly http = inject(HttpClient);
   protected readonly PlusIcon = Plus;
+  protected readonly ExcelIcon = FileSpreadsheet;
   protected readonly SearchIcon = Search;
   protected readonly EditIcon = Edit;
   protected readonly TrashIcon = Trash2;

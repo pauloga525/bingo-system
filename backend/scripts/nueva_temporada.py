@@ -23,10 +23,8 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 import time
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -35,70 +33,23 @@ from _common import get_database
 from bingo.config import Settings
 from bingo.db import Collections
 from bingo.domain.cards import MAX_CARDS, generate_unique_cards, validar_duplicados
+from bingo.errors import ApiError
 from bingo.services.game import GameService
 from bingo.services.pdf_render import render_cards_pdf
+from bingo.services.students_import import read_students, repeated_cedulas
 
-# Columnas del Excel que se usan (se buscan por nombre, no por posición).
-COLUMNAS = ("Nombre", "Primer Apellido", "Segundo Apellido", "Curso", "Num documento")
-# "EDUCACIÓN GENERAL BÁSICA Básica Media 7 A" / "BACHILLERATO Ciencias 2 BGUC F1"
-CURSO_RE = re.compile(r"^(BACHILLERATO|EDUCACI[ÓO]N GENERAL B[ÁA]SICA)\s+(.+?)\s+(\d+)\s+(?:[A-Z]+\s+)?([A-Z]\d?)$")
-# Mismo formato que ya usaba la colección Estudiantes.
-NOMBRE_CURSO = {"BACHILLERATO": "BACHILLERATO", "EGB": "Educación General Básica"}
 CAMPOS_RESERVA = ("totalTables", "usedTables", "fromSerial", "toSerial", "reserved_table_ids", "total_vendido")
 
 
-def _texto(valor: Any) -> str:
-    return " ".join(str(valor or "").split())
-
-
-def parse_curso(curso: str) -> dict[str, Any] | None:
-    m = CURSO_RE.match(_texto(curso))
-    if not m:
-        return None
-    nivel_educativo, especialidad, nivel, paralelo = m.groups()
-    clave = "BACHILLERATO" if nivel_educativo == "BACHILLERATO" else "EGB"
-    return {"Curso": NOMBRE_CURSO[clave], "Especialidad": especialidad, "Nivel": int(nivel), "Paralelo": paralelo}
-
-
 def leer_estudiantes(excel: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    """Devuelve ``(estudiantes, errores)``. Una fila con error no se importa."""
-    import openpyxl  # solo lo necesita este script
-
-    wb = openpyxl.load_workbook(excel, read_only=True, data_only=True)
-    filas = wb.worksheets[0].iter_rows(values_only=True)
-    encabezado = [_texto(h) for h in next(filas)]
-    faltan = [c for c in COLUMNAS if c not in encabezado]
-    if faltan:
-        raise SystemExit(f"Faltan columnas en el Excel: {faltan}")
-    idx = {c: encabezado.index(c) for c in COLUMNAS}  # primera aparición (hay columnas repetidas)
-
-    estudiantes: list[dict[str, Any]] = []
-    errores: list[str] = []
-    for n, fila in enumerate(filas, start=2):
-        if not any(fila):
-            continue
-        valor = {c: _texto(fila[i]) for c, i in idx.items()}
-        curso = parse_curso(valor["Curso"])
-        cedula = valor["Num documento"]
-        if curso is None:
-            errores.append(f"fila {n}: curso no reconocido {valor['Curso']!r}")
-            continue
-        if not cedula or not valor["Nombre"] or not valor["Primer Apellido"]:
-            errores.append(f"fila {n}: falta cédula, nombre o primer apellido")
-            continue
-        doc: dict[str, Any] = {
-            "Primer Apellido": valor["Primer Apellido"].upper(),
-            "Segundo Apellido": valor["Segundo Apellido"].upper(),
-            "Nombre": valor["Nombre"].upper(),
-            **curso,
-            "Num documento": cedula,
-        }
-        estudiantes.append(doc)
-
-    for campo in ("Num documento",):
-        repetidos = [v for v, k in Counter(e.get(campo) for e in estudiantes if e.get(campo)).items() if k > 1]
-        if repetidos:
-            errores.append(f"{campo} repetido en el Excel: {repetidos[:10]}")
+    """Devuelve ``(estudiantes, errores)`` con el mismo lector que usa el panel."""
+    try:
+        estudiantes, errores = read_students(excel)
+    except ApiError as exc:
+        raise SystemExit(exc.message) from exc
+    repetidos = repeated_cedulas(estudiantes)
+    if repetidos:
+        errores.append(f"Num documento repetido en el Excel: {repetidos[:10]}")
     return estudiantes, errores
 
 

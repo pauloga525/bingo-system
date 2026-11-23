@@ -1,16 +1,23 @@
-"""CRUD de animadores y estudiantes (solo administrador)."""
+"""CRUD de animadores y estudiantes, vaciado de participantes y nuevo juego (solo administrador)."""
 
 from __future__ import annotations
 
-from flask import Blueprint, Response, current_app, jsonify, request
+import logging
 
-from ..auth import require_admin
+from flask import Blueprint, Response, current_app, jsonify, request, send_file
+
+from ..auth import current_identity, require_admin
 from ..config import Settings
 from ..db import get_db
+from ..errors import ApiError, NotFound
 from ..services.animators import AnimatorService
+from ..services.new_game import NewGameService
+from ..services.purge import ParticipantPurge
 from ..services.students import StudentService, serialize_student
+from ..services.students_import import StudentImport
 from ..utils import json_body, safe_int
 
+logger = logging.getLogger(__name__)
 bp = Blueprint("admin", __name__, url_prefix="/api")
 
 
@@ -85,6 +92,37 @@ def listar_estudiantes() -> Response:
     return jsonify({"success": True, **result})
 
 
+def _excel_bytes() -> bytes:
+    file = request.files.get("excel")
+    if file is None or not file.filename:
+        raise ApiError("Seleccione el archivo Excel de alumnos (.xlsx).")
+    data: bytes = file.read()
+    return data
+
+
+@bp.post("/estudiantes/importar/vista-previa")
+@require_admin
+def vista_previa_importacion() -> Response:
+    """Analiza el Excel sin guardar nada: válidos, errores, altas, bajas y correos conservados."""
+    return jsonify({"success": True, **StudentImport(get_db(), _settings().backup_dir).preview(_excel_bytes())})
+
+
+@bp.post("/estudiantes/importar")
+@require_admin
+def importar_estudiantes() -> Response:
+    """Reemplaza TODOS los estudiantes por los del Excel (con respaldo y conservando correos)."""
+    result = StudentImport(get_db(), _settings().backup_dir).replace(_excel_bytes(), request.form.get("confirmacion"))
+    logger.warning(
+        "Estudiantes reemplazados por %s: %s insertados, %s borrados, respaldo %s",
+        current_identity().email,
+        result["insertados"],
+        result["borrados"],
+        result["respaldo"],
+    )
+    message = f"Se cargaron {result['insertados']} estudiantes."
+    return jsonify({"success": True, "message": message, **result})
+
+
 @bp.get("/estudiantes/<estudiante_id>")
 @require_admin
 def obtener_estudiante(estudiante_id: str) -> Response:
@@ -110,3 +148,54 @@ def actualizar_estudiante(estudiante_id: str) -> Response:
 def eliminar_estudiante(estudiante_id: str) -> Response:
     _students().delete(estudiante_id)
     return jsonify({"success": True, "message": "Estudiante eliminado."})
+
+
+# ------------------------------------------------------- participantes
+@bp.get("/participantes/vaciar")
+@require_admin
+def resumen_vaciado() -> Response:
+    """Cuántos participantes y tablas se borrarían, y el texto de confirmación."""
+    return jsonify({"success": True, **ParticipantPurge(get_db(), _settings().backup_dir).summary()})
+
+
+@bp.post("/participantes/vaciar")
+@require_admin
+def vaciar_participantes() -> Response:
+    """Borra TODOS los participantes (con respaldo previo) y libera sus tablas."""
+    result = ParticipantPurge(get_db(), _settings().backup_dir).purge(json_body().get("confirmacion"))
+    n = result["participantes_borrados"]
+    logger.warning("Vaciado de participantes por %s: %s", current_identity().email, result)
+    return jsonify({"success": True, "message": f"Se eliminaron {n} participantes.", **result})
+
+
+# ------------------------------------------------------------ nuevo juego
+def _new_game() -> NewGameService:
+    return NewGameService(get_db(), _settings())
+
+
+@bp.get("/juego/nuevo")
+@require_admin
+def resumen_nuevo_juego() -> Response:
+    """Lo que se borrará al empezar un juego desde cero, y el texto de confirmación."""
+    return jsonify({"success": True, **_new_game().summary()})
+
+
+@bp.post("/juego/nuevo")
+@require_admin
+def nuevo_juego() -> Response:
+    """Borra tablas, ganadoras, participantes y reservas; genera tablas nuevas y su PDF."""
+    data = json_body()
+    result = _new_game().start(data.get("cantidad"), data.get("confirmacion"))
+    logger.warning("Nuevo juego desde cero por %s: %s", current_identity().email, result)
+    n = result["tablas_generadas"]
+    return jsonify({"success": True, "message": f"Juego reiniciado con {n} tablas nuevas.", **result})
+
+
+@bp.get("/juego/tablas.pdf")
+@require_admin
+def descargar_tablas_pdf() -> Response:
+    """PDF de las tablas del último juego generado desde el panel."""
+    pdf = _new_game().latest_pdf()
+    if pdf is None:
+        raise NotFound("Todavía no se ha generado un PDF de tablas desde el panel.")
+    return send_file(pdf, mimetype="application/pdf", as_attachment=True, download_name=f"bingo-{pdf.name}")
