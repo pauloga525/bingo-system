@@ -1,15 +1,17 @@
 name: Frontend (CI/CD)
 
 # CI: en cada cambio de frontend/ revisa el formato y compila el panel.
-# CD: al llegar a main, sube el panel compilado a HostGator por FTP.
+# CD: al llegar a main, sube el panel compilado a HostGator por FTP (consultas.uets.edu.ec),
+#     igual que sistema-solicitudes-migration-Front (academico.uets.edu.ec).
 #
 # Configuración (GitHub → Settings → Secrets and variables → Actions):
-#   Secrets:   FTP_SERVER, FTP_USERNAME, FTP_PASSWORD
+#   Secrets:   FTP_SERVER   (p. ej. uets.edu.ec)
+#              FTP_USERNAME (cuenta FTP que entra directamente en
+#                            public_html/website_9a02b4bd, la carpeta de consultas.uets.edu.ec)
+#              FTP_PASSWORD
 #   Variables: API_URL        (obligatoria, dirección HTTPS del servidor Python)
-#              FTP_SERVER_DIR (opcional; por defecto public_html/website_9a02b4bd/, carpeta del panel
-#                              en HostGator vista desde la cuenta FTP principal)
-#              GOOGLE_CLIENT_ID, FRONTEND_BASE_HREF, FTP_PORT (opcionales)
-#   FTP_SERVER es el nombre del servidor de HostGator (gatorNNNN.hostgator.com), no el dominio.
+#              FTP_SERVER_DIR (opcional, por defecto ./ = la carpeta raíz de la cuenta FTP)
+#              GOOGLE_CLIENT_ID, FRONTEND_BASE_HREF (opcionales)
 on:
   push:
     branches: [main]
@@ -21,9 +23,9 @@ on:
 permissions:
   contents: read
 
-# Un despliegue a la vez; uno nuevo espera a que termine el anterior.
+# Evita dos despliegues a la vez sobre la misma carpeta.
 concurrency:
-  group: frontend-${{ github.ref }}
+  group: deploy-hostgator-consultas
   cancel-in-progress: false
 
 jobs:
@@ -46,7 +48,7 @@ jobs:
         run: npx prettier --check src
       - name: Compilar
         env:
-          # "/" si el panel va en la raíz del dominio; "/bingo/" si va en una subcarpeta.
+          # "/" porque el panel va en la raíz de consultas.uets.edu.ec.
           BASE_HREF: ${{ vars.FRONTEND_BASE_HREF || '/' }}
         run: npx ng build --base-href "$BASE_HREF"
       - name: Guardar el compilado
@@ -60,13 +62,13 @@ jobs:
   deploy:
     name: Desplegar en HostGator
     needs: build
+    # Solo despliega con push a main (o lanzado a mano), nunca desde un PR.
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: hostgator
     env:
-      # Carpeta del panel en HostGator, relativa a la raíz de la cuenta FTP (termina en "/").
-      DEPLOY_DIR: ${{ vars.FTP_SERVER_DIR || 'public_html/website_9a02b4bd/' }}
+      DEPLOY_DIR: ${{ vars.FTP_SERVER_DIR || './' }}
     steps:
       - name: Descargar el compilado
         uses: actions/download-artifact@v4
@@ -89,15 +91,40 @@ jobs:
             echo "::error::Falta configurar en GitHub:$faltan (ver frontend/README.md, sección Despliegue)"
             exit 1
           fi
-          echo "Destino: $DEPLOY_DIR"
           case "$DEPLOY_DIR" in
             */) ;;
-            *) echo "::error::FTP_SERVER_DIR debe terminar en '/' (p. ej. public_html/)"; exit 1 ;;
+            *) echo "::error::FTP_SERVER_DIR debe terminar en '/' (p. ej. ./)"; exit 1 ;;
           esac
           case "$API_URL" in
             https://*) ;;
             *) echo "::error::API_URL debe empezar con https:// (el panel en HostGator usa HTTPS)"; exit 1 ;;
           esac
+
+      # Protección: si la carpeta de destino ya tiene otro sitio (un index.html sin la marca
+      # del panel), no se sube nada. Evita pisar, por ejemplo, academico.uets.edu.ec si se
+      # reutilizan aquí los secretos FTP de otro proyecto.
+      - name: Verificar que la carpeta es la del panel
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          host="${FTP_SERVER#ftp://}"; host="${host%%/*}"; host="${host%%:*}"
+          netrc="$RUNNER_TEMP/netrc"
+          printf 'machine %s login %s password %s\n' "$host" "$FTP_USERNAME" "$FTP_PASSWORD" > "$netrc"
+          chmod 600 "$netrc"
+          dir="${DEPLOY_DIR#./}"
+          if ! listado=$(curl -sS --netrc-file "$netrc" --list-only --max-time 60 "ftp://$host/$dir"); then
+            rm -f "$netrc"
+            echo "::error::No se pudo conectar al FTP o listar la carpeta '$DEPLOY_DIR' (revise FTP_SERVER, usuario y contraseña)"
+            exit 1
+          fi
+          rm -f "$netrc"
+          echo "Archivos actuales en la carpeta de destino: $(echo "$listado" | grep -c . || true)"
+          if echo "$listado" | grep -qx 'index.html' && ! echo "$listado" | grep -qx 'bingo-panel.txt'; then
+            echo "::error::La carpeta de destino ya tiene otro sitio (index.html sin bingo-panel.txt). Use una cuenta FTP que entre en public_html/website_9a02b4bd (consultas.uets.edu.ec)."
+            exit 1
+          fi
 
       - name: Generar env.js de producción
         env:
@@ -120,43 +147,17 @@ jobs:
             console.log("API_URL =", env.API_URL);
           '
 
-      # lftp en lugar de FTP-Deploy-Action: esa acción corta el canal de datos TLS con el
-      # Pure-FTPd de HostGator ("tlsv1 alert decode error"). Siempre FTPS con certificado
-      # verificado: FTP_SERVER debe ser el nombre del servidor (gatorNNNN.hostgator.com),
-      # porque el certificado del FTP de HostGator es *.hostgator.com.
-      - name: Subir por FTPS (lftp)
-        env:
-          FTP_SERVER: ${{ secrets.FTP_SERVER }}
-          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
-          LFTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
-          FTP_PORT: ${{ vars.FTP_PORT || '21' }}
-        run: |
-          sudo apt-get install -y -qq lftp > /dev/null
-          host="${FTP_SERVER#ftp://}"; host="${host#ftps://}"; host="${host%%/*}"; host="${host%%:*}"
-          case "$host" in
-            *.hostgator.com) ;;
-            *) echo "::warning::FTP_SERVER no termina en .hostgator.com; el certificado probablemente no coincidirá (use gatorNNNN.hostgator.com, ver cPanel → Nombre del servidor)" ;;
-          esac
-          echo "Subiendo a $host:$FTP_PORT → $DEPLOY_DIR (FTPS, certificado verificado)"
-          cd panel
-          # Orden: primero todo menos index.html; luego index.html (así nunca apunta a archivos
-          # que aún no subieron); al final se borran los .js/.css de versiones anteriores.
-          lftp -u "$FTP_USERNAME" --env-password -p "$FTP_PORT" "$host" <<EOF
-          set cmd:fail-exit true
-          set ftp:ssl-allow true
-          set ftp:ssl-force true
-          set ftp:ssl-protect-data true
-          set ssl:verify-certificate true
-          set ftp:passive-mode true
-          set net:timeout 30
-          set net:max-retries 8
-          set net:reconnect-interval-base 5
-          set net:reconnect-interval-max 30
-          set mirror:parallel-transfer-count 6
-          mkdir -p -f "$DEPLOY_DIR"
-          cd "$DEPLOY_DIR"
-          mirror -R --no-perms --verbose=1 --exclude-glob index.html . .
-          put index.html
-          mirror -R --no-perms --verbose=1 --delete --include-glob chunk-*.js --include-glob main-*.js --include-glob polyfills-*.js --include-glob styles-*.css . .
-          bye
-          EOF
+      - name: Subir por FTP a consultas.uets.edu.ec
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          # FTPS falla en el canal de datos de HostGator (tlsv1 alert decode error),
+          # igual que en sistema-solicitudes-migration-Front.
+          protocol: ftp
+          port: 21
+          local-dir: ./panel/
+          # La cuenta FTP entra directamente en
+          # public_html/website_9a02b4bd (consultas.uets.edu.ec).
+          server-dir: ${{ env.DEPLOY_DIR }}

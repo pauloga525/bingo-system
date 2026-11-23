@@ -37,9 +37,15 @@ cambia algo en `frontend/`:
 
 - **CI** (también en pull requests): `npm ci`, revisión de formato con Prettier y compilación.
 - **CD** (solo al llegar a `main`, o a mano con *Run workflow*): genera `env.js` de producción y sube
-  la carpeta compilada a HostGator por **FTPS con `lftp`** (cifrado y con el certificado verificado).
-  Solo se suben los archivos que cambiaron. `index.html` se sube al final y después se borran los
-  `.js`/`.css` de versiones anteriores; los demás archivos de la carpeta no se tocan.
+  la carpeta compilada a HostGator por **FTP** con FTP-Deploy-Action, igual que
+  `sistema-solicitudes-migration-Front` (`academico.uets.edu.ec`). Solo se suben los archivos que
+  cambiaron y se borran los que ya no existen en el compilado.
+- **Protección:** antes de subir revisa la carpeta de destino. Si ya contiene otro sitio (un
+  `index.html` sin el archivo `bingo-panel.txt` del panel), se detiene sin subir nada.
+
+> Se usa FTP sin cifrar porque FTPS falla en el canal de datos del FTP de HostGator
+> ("tlsv1 alert decode error"). El usuario y la contraseña FTP viajan sin cifrar: use una cuenta FTP
+> exclusiva para el panel, limitada a su carpeta.
 
 El backend tiene su propio workflow (`backend.yml`), que solo ejecuta pruebas y no se despliega.
 
@@ -48,22 +54,21 @@ El backend tiene su propio workflow (`backend.yml`), que solo ejecuta pruebas y 
 El panel se publica en **<https://consultas.uets.edu.ec/>** (raíz del subdominio, así que
 `FRONTEND_BASE_HREF` se deja en `/`).
 
-1. **HostGator:** ese subdominio abre la carpeta `public_html/website_9a02b4bd` de la cuenta.
-   Lo más seguro es crear en cPanel → Cuentas FTP una cuenta limitada a esa carpeta (y poner
-   `FTP_SERVER_DIR` = `./`), así el despliegue no puede tocar el resto del sitio. Con la cuenta FTP
-   principal no hace falta configurar la carpeta.
+1. **HostGator (cPanel → Cuentas FTP):** cree una cuenta FTP **exclusiva del panel** cuyo directorio
+   sea `public_html/website_9a02b4bd` (la carpeta de `consultas.uets.edu.ec`). **No reutilice** la
+   cuenta FTP de `academico.uets.edu.ec`: entra en otra carpeta y el panel se subiría encima de ese
+   sitio (la protección lo detecta y detiene el despliegue).
 2. **GitHub → repositorio → Settings → Secrets and variables → Actions:**
 
    | Tipo | Nombre | Valor |
    | --- | --- | --- |
-   | Secret | `FTP_SERVER` | **Nombre del servidor** de HostGator, `gatorNNNN.hostgator.com` (cPanel → Información general → Nombre del servidor). No use `uets.edu.ec` ni `ftp.uets.edu.ec`: el certificado del FTP es `*.hostgator.com` y la conexión se rechaza |
-   | Secret | `FTP_USERNAME` | Usuario de la cuenta FTP |
-   | Secret | `FTP_PASSWORD` | Contraseña de la cuenta FTP |
-   | Variable (opcional) | `FTP_SERVER_DIR` | Carpeta de destino **vista desde la cuenta FTP**, terminada en `/`. Por defecto `public_html/website_9a02b4bd/` (la carpeta del panel en HostGator, vista desde la cuenta FTP principal). Si usa una cuenta FTP limitada a esa carpeta, ponga `./` |
+   | Secret | `FTP_SERVER` | Servidor FTP, p. ej. `uets.edu.ec` (solo el nombre, sin `ftp://`) |
+   | Secret | `FTP_USERNAME` | Usuario de la cuenta FTP del panel (p. ej. `consultas@uets.edu.ec`) |
+   | Secret | `FTP_PASSWORD` | Contraseña de esa cuenta FTP |
    | Variable | `API_URL` | Dirección **HTTPS** del servidor Python (p. ej. `https://api-bingo.midominio.com`) |
+   | Variable (opcional) | `FTP_SERVER_DIR` | Carpeta de destino dentro de la cuenta FTP, terminada en `/`. Por defecto `./` (la cuenta entra directamente en la carpeta del panel) |
    | Variable (opcional) | `FRONTEND_BASE_HREF` | `/` por defecto (correcto para `consultas.uets.edu.ec`); solo cambia si el panel se mueve a una subcarpeta, p. ej. `/bingo/` |
    | Variable (opcional) | `GOOGLE_CLIENT_ID` | Solo si cambia el cliente de Google (por defecto, el de `public/env.js`) |
-   | Variable (opcional) | `FTP_PORT` | Por defecto `21` |
 
    Las contraseñas van en **Secrets**: GitHub las oculta en los registros y nadie puede leerlas
    después de guardarlas.
@@ -84,7 +89,7 @@ El archivo `public/.htaccess` (va dentro del compilado) hace que las rutas del p
 recargar la página en Apache y evita que el navegador guarde en caché `index.html` y `env.js`.
 
 **Despliegue manual** (sin GitHub): `npm run build`, edite `dist/gestor-usrs-bingo-angular/browser/env.js`
-y suba el contenido de esa carpeta, incluido `.htaccess`, con el Administrador de archivos de cPanel.
+y suba el contenido de esa carpeta, incluidos `.htaccess` y `bingo-panel.txt`, con el Administrador de archivos de cPanel.
 
 ## Rutas
 

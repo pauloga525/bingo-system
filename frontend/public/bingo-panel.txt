@@ -1,0 +1,2 @@
+Panel Bingo UETS (Angular). Marca usada por el despliegue automático para confirmar que esta
+carpeta es la del panel antes de reemplazar su contenido. No la borre.
