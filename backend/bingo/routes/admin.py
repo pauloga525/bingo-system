@@ -156,6 +156,7 @@ def listar_estudiantes() -> Response:
         request.args.get("search", "").strip(),
         safe_int(request.args.get("page"), 1),
         safe_int(request.args.get("per_page"), 25),
+        {k: request.args.get(k, "").strip() for k in ("curso", "especialidad", "nivel", "paralelo", "correo")},
     )
     return jsonify({"success": True, **result})
 

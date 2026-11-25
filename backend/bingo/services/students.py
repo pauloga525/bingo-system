@@ -128,14 +128,30 @@ class StudentService:
             raise Conflict(TAKEN)
         return self.get(doc["_id"])
 
-    def search(self, q: str, page: int, per_page: int) -> dict[str, Any]:
+    def search(self, q: str, page: int, per_page: int, filtros: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Búsqueda paginada por texto y filtros exactos (curso, especialidad, nivel, paralelo, correo).
+
+        ``correo`` acepta ``con`` (tiene correo) o ``sin`` (no tiene).
+        """
         per_page = min(max(per_page, 1), MAX_PER_PAGE)
         page = max(page, 1)
-        query: dict[str, Any] = {}
+        condiciones: list[dict[str, Any]] = []
         if q:
             pattern = {"$regex": re.escape(q), "$options": "i"}
             fields = ("Num documento", "Primer Apellido", "Segundo Apellido", "Nombre", "correo")
-            query = {"$or": [{f: pattern} for f in fields]}
+            condiciones.append({"$or": [{f: pattern} for f in fields]})
+        filtros = filtros or {}
+        for api_key in ("curso", "especialidad", "paralelo"):
+            if filtros.get(api_key):
+                condiciones.append({FIELD_MAP[api_key]: str(filtros[api_key])})
+        if safe_int(filtros.get("nivel"), 0) > 0:
+            condiciones.append({"Nivel": safe_int(filtros["nivel"], 0)})
+        sin_correo = {"$or": [{"correo": {"$exists": False}}, {"correo": {"$in": ["", None]}}]}
+        if filtros.get("correo") == "sin":
+            condiciones.append(sin_correo)
+        elif filtros.get("correo") == "con":
+            condiciones.append({"correo": {"$nin": ["", None], "$exists": True}})
+        query: dict[str, Any] = {"$and": condiciones} if condiciones else {}
         total = self.cols.students.count_documents(query)
         docs = (
             self.cols.students.find(query)

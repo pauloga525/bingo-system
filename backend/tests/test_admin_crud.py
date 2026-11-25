@@ -173,6 +173,55 @@ def test_student_search_and_pagination(admin: FlaskClient) -> None:
     assert admin.get("/api/estudiantes", query_string={"per_page": 999}).json["per_page"] == 100
 
 
+def test_student_filters(admin: FlaskClient) -> None:
+    base = {**ESTUDIANTE, "correo": None}
+    admin.post(
+        "/api/estudiantes",
+        json={
+            **base,
+            "cedula": "0101",
+            "curso": "BACHILLERATO",
+            "especialidad": "Ciencias",
+            "nivel": 1,
+            "paralelo": "F1",
+        },
+    )
+    admin.post(
+        "/api/estudiantes",
+        json={
+            **base,
+            "cedula": "0102",
+            "curso": "BACHILLERATO",
+            "especialidad": "Mecatrónica",
+            "nivel": 1,
+            "paralelo": "D1",
+            "correo": "a.b.est@uets.edu.ec",
+        },
+    )
+    admin.post(
+        "/api/estudiantes",
+        json={
+            **base,
+            "cedula": "0103",
+            "curso": "Educación General Básica",
+            "especialidad": "Básica Media",
+            "nivel": 7,
+            "paralelo": "A",
+        },
+    )
+
+    def cedulas(**filtros: Any) -> list[str]:
+        return sorted(e["cedula"] for e in admin.get("/api/estudiantes", query_string=filtros).json["estudiantes"])
+
+    assert cedulas(curso="BACHILLERATO") == ["0101", "0102"]
+    assert cedulas(curso="BACHILLERATO", especialidad="Mecatrónica") == ["0102"]
+    assert cedulas(nivel="7") == ["0103"]
+    assert cedulas(paralelo="F1") == ["0101"]
+    assert cedulas(correo="con") == ["0102"]
+    assert cedulas(correo="sin", curso="BACHILLERATO") == ["0101"]
+    assert cedulas(search="0103", curso="BACHILLERATO") == []
+
+
 def test_update_legacy_animator_without_user_creates_account(admin: FlaskClient, cols: Collections) -> None:
     legacy_id = cols.animators.insert_one(
         {

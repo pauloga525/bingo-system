@@ -2,7 +2,15 @@
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { Edit, FileSpreadsheet, LucideAngularModule, Plus, Search, Trash2 } from 'lucide-angular';
+import {
+  Edit,
+  FileSpreadsheet,
+  FilterX,
+  LucideAngularModule,
+  Plus,
+  Search,
+  Trash2,
+} from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
 import { errorMessage } from '../core/http';
@@ -37,8 +45,44 @@ const FIELDS: CrudField[] = [
   { name: 'nivel', label: 'Nivel', type: 'number', required: true },
   { name: 'paralelo', label: 'Paralelo', required: true },
 ];
-const HEADERS = ['Cédula', 'Apellidos y nombres', 'Correo', 'Curso', 'Nivel', 'Paralelo', ''];
+const HEADERS = [
+  'Cédula',
+  'Apellidos y nombres',
+  'Correo',
+  'Nivel educativo',
+  'Curso',
+  'Especialidad / subnivel',
+  'Paralelo',
+  '',
+];
 const PER_PAGE = 25;
+
+/** Curso (paralelo) con alumnos, de /api/cursos: alimenta los filtros en cascada. */
+interface CursoOpcion {
+  curso: string;
+  especialidad: string;
+  nivel: number;
+  paralelo: string;
+  estudiantes: number;
+}
+
+interface Filtros {
+  curso: string;
+  especialidad: string;
+  nivel: string;
+  paralelo: string;
+  correo: '' | 'con' | 'sin';
+}
+
+const SIN_FILTROS: Filtros = { curso: '', especialidad: '', nivel: '', paralelo: '', correo: '' };
+const SELECT =
+  'border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2 text-sm';
+
+/** "BACHILLERATO" -> "Bachillerato"; "Educación General Básica" -> "EGB". */
+export const nivelEducativo = (curso: string): string =>
+  curso === 'BACHILLERATO' ? 'Bachillerato' : curso === 'Educación General Básica' ? 'EGB' : curso;
+
+const unicos = <T>(valores: T[]): T[] => [...new Set(valores)];
 
 @Component({
   selector: 'app-estudiantes-admin',
@@ -68,7 +112,7 @@ const PER_PAGE = 25;
         </div>
       </div>
 
-      <form (submit)="$event.preventDefault(); buscar()" class="flex gap-2 mb-4">
+      <form (submit)="$event.preventDefault(); buscar()" class="flex flex-wrap gap-2 mb-3">
         <input
           [value]="search()"
           (input)="search.set($any($event.target).value)"
@@ -82,6 +126,73 @@ const PER_PAGE = 25;
           <lucide-icon [img]="SearchIcon" [size]="16" /> Buscar
         </button>
       </form>
+
+      <!-- Filtros en cascada: cada lista muestra solo lo que existe con los filtros anteriores. -->
+      <div class="flex flex-wrap items-center gap-2 mb-4">
+        <select
+          aria-label="Nivel educativo"
+          [value]="filtros().curso"
+          (change)="filtrar('curso', $any($event.target).value)"
+          [class]="select"
+        >
+          <option value="">Nivel educativo: todos</option>
+          @for (c of opcionesCurso(); track c) {
+            <option [value]="c">{{ nivelEducativo(c) }}</option>
+          }
+        </select>
+        <select
+          aria-label="Curso"
+          [value]="filtros().nivel"
+          (change)="filtrar('nivel', $any($event.target).value)"
+          [class]="select"
+        >
+          <option value="">Curso: todos</option>
+          @for (n of opcionesNivel(); track n) {
+            <option [value]="n">{{ n }}.º</option>
+          }
+        </select>
+        <select
+          aria-label="Especialidad"
+          [value]="filtros().especialidad"
+          (change)="filtrar('especialidad', $any($event.target).value)"
+          [class]="select"
+        >
+          <option value="">Especialidad / subnivel: todas</option>
+          @for (e of opcionesEspecialidad(); track e) {
+            <option [value]="e">{{ e }}</option>
+          }
+        </select>
+        <select
+          aria-label="Paralelo"
+          [value]="filtros().paralelo"
+          (change)="filtrar('paralelo', $any($event.target).value)"
+          [class]="select"
+        >
+          <option value="">Paralelo: todos</option>
+          @for (p of opcionesParalelo(); track p) {
+            <option [value]="p">{{ p }}</option>
+          }
+        </select>
+        <select
+          aria-label="Correo"
+          [value]="filtros().correo"
+          (change)="filtrar('correo', $any($event.target).value)"
+          [class]="select"
+        >
+          <option value="">Correo: todos</option>
+          <option value="con">Con correo</option>
+          <option value="sin">Sin correo</option>
+        </select>
+        @if (hayFiltros()) {
+          <button
+            type="button"
+            (click)="limpiar()"
+            class="flex items-center gap-1 text-sm text-blue-600 hover:underline"
+          >
+            <lucide-icon [img]="FilterXIcon" [size]="16" /> Limpiar filtros
+          </button>
+        }
+      </div>
 
       @if (error()) {
         <p class="text-red-600 mb-3">{{ error() }}</p>
@@ -112,8 +223,19 @@ const PER_PAGE = 25;
                       <span class="text-gray-400">—</span>
                     }
                   </td>
-                  <td class="px-3 py-2">{{ e.curso }} {{ e.especialidad }}</td>
-                  <td class="px-3 py-2">{{ e.nivel }}</td>
+                  <td class="px-3 py-2 whitespace-nowrap">
+                    <span
+                      class="text-xs px-2 py-0.5 rounded"
+                      [class]="
+                        e.curso === 'BACHILLERATO'
+                          ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200'
+                          : 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200'
+                      "
+                      >{{ nivelEducativo(e.curso) }}</span
+                    >
+                  </td>
+                  <td class="px-3 py-2 whitespace-nowrap">{{ e.nivel }}.º</td>
+                  <td class="px-3 py-2">{{ e.especialidad || '—' }}</td>
                   <td class="px-3 py-2">{{ e.paralelo }}</td>
                   <td class="px-3 py-2 whitespace-nowrap">
                     <button
@@ -132,6 +254,12 @@ const PER_PAGE = 25;
                     >
                       <lucide-icon [img]="TrashIcon" [size]="16" />
                     </button>
+                  </td>
+                </tr>
+              } @empty {
+                <tr>
+                  <td [attr.colspan]="headers.length" class="px-3 py-4 text-center text-gray-500">
+                    No hay estudiantes con esos filtros.
                   </td>
                 </tr>
               }
@@ -183,6 +311,40 @@ export class EstudiantesAdmin implements OnInit {
   protected readonly TrashIcon = Trash2;
   protected readonly fields = FIELDS;
   protected readonly headers = HEADERS;
+  protected readonly FilterXIcon = FilterX;
+  protected readonly select = SELECT;
+  protected readonly nivelEducativo = nivelEducativo;
+
+  private readonly cursos = signal<CursoOpcion[]>([]);
+  protected readonly filtros = signal<Filtros>({ ...SIN_FILTROS });
+  protected readonly hayFiltros = computed(() =>
+    Object.values(this.filtros()).some((v) => v !== ''),
+  );
+  /** Cursos que cumplen los filtros elegidos, sin contar ``campo`` (para sus opciones). */
+  private cursosSin(campo: keyof Filtros): CursoOpcion[] {
+    const f = this.filtros();
+    return this.cursos().filter(
+      (c) =>
+        (campo === 'curso' || !f.curso || c.curso === f.curso) &&
+        (campo === 'nivel' || !f.nivel || String(c.nivel) === f.nivel) &&
+        (campo === 'especialidad' || !f.especialidad || c.especialidad === f.especialidad) &&
+        (campo === 'paralelo' || !f.paralelo || c.paralelo === f.paralelo),
+    );
+  }
+  protected readonly opcionesCurso = computed(() =>
+    unicos(this.cursosSin('curso').map((c) => c.curso)).sort(),
+  );
+  protected readonly opcionesNivel = computed(() =>
+    unicos(this.cursosSin('nivel').map((c) => c.nivel)).sort((a, b) => a - b),
+  );
+  protected readonly opcionesEspecialidad = computed(() =>
+    unicos(this.cursosSin('especialidad').map((c) => c.especialidad))
+      .filter(Boolean)
+      .sort(),
+  );
+  protected readonly opcionesParalelo = computed(() =>
+    unicos(this.cursosSin('paralelo').map((c) => c.paralelo)).sort(),
+  );
 
   protected readonly estudiantes = signal<Estudiante[]>([]);
   protected readonly total = signal(0);
@@ -196,6 +358,28 @@ export class EstudiantesAdmin implements OnInit {
 
   ngOnInit(): void {
     void this.cargar();
+    void this.cargarCursos();
+  }
+
+  private async cargarCursos(): Promise<void> {
+    try {
+      const data = await firstValueFrom(this.http.get<{ cursos?: CursoOpcion[] }>('/api/cursos'));
+      this.cursos.set(data.cursos || []);
+    } catch {
+      this.cursos.set([]); // sin opciones: la búsqueda por texto sigue funcionando
+    }
+  }
+
+  protected filtrar(campo: keyof Filtros, valor: string): void {
+    this.filtros.update((f) => ({ ...f, [campo]: valor }));
+    this.irA(1);
+  }
+
+  protected limpiar(): void {
+    this.filtros.set({ ...SIN_FILTROS });
+    this.search.set('');
+    this.query.set('');
+    this.irA(1);
   }
 
   protected buscar(): void {
@@ -214,7 +398,12 @@ export class EstudiantesAdmin implements OnInit {
     try {
       const data = await firstValueFrom(
         this.http.get<{ estudiantes?: Estudiante[]; total?: number }>('/api/estudiantes', {
-          params: { search: this.query(), page: this.page(), per_page: PER_PAGE },
+          params: {
+            search: this.query(),
+            page: this.page(),
+            per_page: PER_PAGE,
+            ...this.filtros(),
+          },
         }),
       );
       this.estudiantes.set(data.estudiantes || []);
