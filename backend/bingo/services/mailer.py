@@ -55,6 +55,11 @@ class SmtpConfig:
     sender: str
 
     @property
+    def login_password(self) -> str:
+        """Google muestra la contraseña de aplicación en grupos con espacios: se envía sin ellos."""
+        return self.password.replace(" ", "")
+
+    @property
     def ready(self) -> bool:
         return bool(self.host and self.user and self.password and self.sender)
 
@@ -84,12 +89,12 @@ class SmtpMailer:
         context = ssl.create_default_context()
         if cfg.port == 465:
             with smtplib.SMTP_SSL(cfg.host, cfg.port, context=context, timeout=_TIMEOUT) as smtp:
-                smtp.login(cfg.user, cfg.password)
+                smtp.login(cfg.user, cfg.login_password)
                 smtp.send_message(msg)
         else:
             with smtplib.SMTP(cfg.host, cfg.port, timeout=_TIMEOUT) as smtp:
                 smtp.starttls(context=context)
-                smtp.login(cfg.user, cfg.password)
+                smtp.login(cfg.user, cfg.login_password)
                 smtp.send_message(msg)
 
 

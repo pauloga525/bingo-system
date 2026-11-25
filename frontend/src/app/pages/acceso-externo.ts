@@ -59,7 +59,10 @@ const INPUT =
             autocomplete="one-time-code"
             maxlength="6"
             placeholder="Código de 6 dígitos"
-            [class]="input + ' text-center text-2xl tracking-[0.5em]'"
+            [class]="
+              input +
+              ' text-center text-2xl tracking-[0.5em] placeholder:text-base placeholder:tracking-normal'
+            "
           />
           <button
             type="submit"

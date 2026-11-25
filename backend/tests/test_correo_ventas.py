@@ -139,6 +139,7 @@ def test_notify_runs_in_background(cols: Collections, seed: Seed, monkeypatch: p
 
 def test_mail_helpers() -> None:
     assert SmtpConfig("h", 465, "u", "p", "f").ready and not SmtpConfig("", 465, "", "", "").ready
+    assert SmtpConfig("h", 465, "u", "abcd efgh ijkl mnop", "f").login_password == "abcdefghijklmnop"
     msg = build_message(Mail("a@b.com", "Asunto", "texto", "<p>html</p>"), "Yo <yo@b.com>")
     assert msg["To"] == "a@b.com" and msg.is_multipart()
     with pytest.raises(MailNotConfigured):

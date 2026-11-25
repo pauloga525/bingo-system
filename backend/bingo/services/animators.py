@@ -380,10 +380,10 @@ class AnimatorService:
         return self.get(doc["_id"])
 
     def record_login(self, email: str, google_name: str) -> None:
-        self.cols.animators.update_one(
-            {"correo": normalize_email(email)},
-            {"$set": {"ultimo_ingreso": datetime.now().isoformat(timespec="seconds"), "nombre_google": google_name}},
-        )
+        campos: dict[str, Any] = {"ultimo_ingreso": datetime.now().isoformat(timespec="seconds")}
+        if google_name:  # no se borra el nombre de Google conocido si este token no lo trae
+            campos["nombre_google"] = google_name
+        self.cols.animators.update_one({"correo": normalize_email(email)}, {"$set": campos})
 
     def create(self, data: dict[str, Any], reassign: bool = False) -> dict[str, Any]:
         fields = self._clean(data, partial=False)
