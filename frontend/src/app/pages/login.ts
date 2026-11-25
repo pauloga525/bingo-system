@@ -13,7 +13,7 @@ import {
 import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 
-import { GOOGLE_CLIENT_ID } from '../core/config';
+import { API_BASE_URL, GOOGLE_CLIENT_ID } from '../core/config';
 import { loadGoogleId } from '../core/google';
 import { errorBody, errorMessage } from '../core/http';
 import { SesionResponse, SessionService, homeFor } from '../core/session';
@@ -110,7 +110,7 @@ interface RegistroPendiente {
           <app-acceso-externo (entrar)="entrar($event)" />
         }
 
-        @if (devMode && !registro() && modo() === 'uets') {
+        @if (devMode && !registro()) {
           <div class="border border-dashed border-yellow-600 rounded-lg p-4 space-y-2">
             <p class="text-xs text-yellow-400 text-center">Login de prueba (solo desarrollo)</p>
             @for (u of usuariosDemo; track u.correo) {
@@ -122,6 +122,14 @@ interface RegistroPendiente {
                 Entrar como {{ u.rol }}
               </button>
             }
+            <!-- Comprador externo de la demo: el backend de demo da la sesión sin pedir el código. -->
+            <button
+              type="button"
+              (click)="entrarExternoDemo()"
+              class="w-full bg-gray-800 hover:bg-gray-700 text-white rounded-lg px-4 py-2 text-sm"
+            >
+              Entrar como Externo (María Gómez)
+            </button>
           </div>
         }
 
@@ -202,6 +210,18 @@ export class Login implements AfterViewInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.destroyed = true;
+  }
+
+  /** Solo desarrollo: sesión del comprador externo de la demo local (el sistema real pide el código). */
+  protected async entrarExternoDemo(): Promise<void> {
+    this.error.set('');
+    try {
+      this.entrar(
+        await firstValueFrom(this.http.post<SesionResponse>(`${API_BASE_URL}/demo/externo`, {})),
+      );
+    } catch {
+      this.error.set('El backend de demo local no está corriendo.');
+    }
   }
 
   protected entrar(data: SesionResponse): void {
