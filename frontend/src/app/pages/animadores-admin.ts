@@ -1,7 +1,7 @@
-// CRUD de vendedores (solo admin): animadores y los roles secretaría, financiero, parroquia
-// y oratorio. El correo es el que le permite iniciar sesión con Google.
-// Cada animador tiene como máximo un curso (paralelo) y cada curso como máximo un animador.
-// Los demás roles no tienen curso y solo venden a externos.
+// CRUD de vendedores (solo admin). Un vendedor puede tener varios roles: animador,
+// secretaría, financiero, parroquia, oratorio y tecniclub. El correo es el que le permite
+// iniciar sesión con Google. Solo con el rol animador se tiene curso (como máximo uno, y cada
+// curso como máximo un animador). Las ventas de los demás roles cuentan para su rol.
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
@@ -32,6 +32,7 @@ interface Animador extends CursoBase {
   _id: string;
   nombre: string;
   rol: string;
+  roles: string[];
   rol_nombre: string;
   correo: string;
   curso_asignado: boolean;
@@ -57,7 +58,7 @@ interface Curso extends CursoBase {
 type Filtro = string;
 const ROL_OPCIONES: CrudOption[] = Object.entries(CARGOS).map(([value, label]) => ({
   value,
-  label: value === 'animador' ? `${label} (tiene curso)` : `${label} (solo externos)`,
+  label: value === 'animador' ? `${label} (tiene curso)` : label,
 }));
 
 /** Clave única de un curso para la lista desplegable ('' = sin curso). */
@@ -111,14 +112,14 @@ const ESTADOS: Record<Animador['estado'], { texto: string; clase: string }> = {
           </a>
           <button
             type="button"
-            (click)="lote.set({ correos: '', rol: 'financiero' })"
+            (click)="lote.set({ correos: '', roles: ['financiero'] })"
             class="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 dark:text-white px-4 py-2 rounded-lg"
           >
             <lucide-icon [img]="MailIcon" [size]="16" /> Agregar varios por correo
           </button>
           <button
             type="button"
-            (click)="editing.set({ cursoKey: '', rol: 'animador' })"
+            (click)="editing.set({ cursoKey: '', roles: ['animador'] })"
             class="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
           >
             <lucide-icon [img]="PlusIcon" [size]="16" /> Nuevo vendedor
@@ -221,10 +222,10 @@ const ESTADOS: Record<Animador['estado'], { texto: string; clase: string }> = {
                   <td class="px-3 py-2">
                     @if (a.curso_asignado) {
                       {{ nombreCurso(a) }}
-                    } @else if (a.rol && a.rol !== 'animador') {
+                    } @else if (!rolesDe(a).includes('animador')) {
                       <span
                         class="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 px-2 py-0.5 rounded"
-                        >Solo externos</span
+                        >No aplica (sin rol animador)</span
                       >
                     } @else {
                       <span
@@ -332,14 +333,19 @@ export class AnimadoresAdmin implements OnInit {
       placeholder: 'persona1@uets.edu.ec, persona2@uets.edu.ec',
     },
     {
-      name: 'rol',
-      label: 'Rol',
-      type: 'select',
+      name: 'roles',
+      label: 'Roles',
+      type: 'checks',
       required: true,
       wide: true,
       options: ROL_OPCIONES,
     },
   ];
+
+  /** Roles del vendedor (los documentos antiguos solo traen ``rol``). */
+  protected rolesDe(a: Animador): string[] {
+    return a.roles?.length ? a.roles : [a.rol || 'animador'];
+  }
 
   protected readonly conAcceso = computed(() => this.animadores().filter((a) => a.correo).length);
   protected readonly cursosLibres = computed(() => this.cursos().filter((c) => !c.animador).length);
@@ -347,14 +353,14 @@ export class AnimadoresAdmin implements OnInit {
     Object.entries(CARGOS).map(([rol, nombre]) => ({
       rol,
       nombre,
-      n: this.animadores().filter((a) => (a.rol || 'animador') === rol).length,
+      n: this.animadores().filter((a) => this.rolesDe(a).includes(rol)).length,
     })),
   );
   protected readonly visibles = computed(() => {
     const f = this.filtro();
-    const esAnimador = (a: Animador) => (a.rol || 'animador') === 'animador';
+    const esAnimador = (a: Animador) => this.rolesDe(a).includes('animador');
     return this.animadores().filter((a) => {
-      if (f.startsWith('rol:')) return (a.rol || 'animador') === f.slice(4);
+      if (f.startsWith('rol:')) return this.rolesDe(a).includes(f.slice(4));
       if (f === 'con') return esAnimador(a) && a.curso_asignado;
       if (f === 'sin') return esAnimador(a) && !a.curso_asignado;
       return true;
@@ -392,16 +398,16 @@ export class AnimadoresAdmin implements OnInit {
         placeholder: 'nombre@uets.edu.ec',
       },
       {
-        name: 'rol',
-        label: 'Rol',
-        type: 'select',
+        name: 'roles',
+        label: 'Roles (puede tener varios)',
+        type: 'checks',
         required: true,
         wide: true,
         options: ROL_OPCIONES,
       },
       {
         name: 'cursoKey',
-        label: 'Curso (paralelo) — solo para animadores',
+        label: 'Curso (paralelo) — solo con el rol Animador',
         type: 'select',
         wide: true,
         options: opciones,
@@ -443,21 +449,21 @@ export class AnimadoresAdmin implements OnInit {
       _id: a._id,
       nombre: a.nombre,
       correo: a.correo,
-      rol: a.rol || 'animador',
+      roles: this.rolesDe(a),
       cursoKey: cursoKey(a),
     });
   }
 
   protected readonly guardar = async (values: CrudValues): Promise<void> => {
-    const rol = String(values['rol'] || 'animador');
-    // Los roles distintos de animador no tienen curso: se envía vacío.
+    const roles = (values['roles'] as string[] | undefined) || ['animador'];
+    // Sin el rol animador no hay curso: se envía vacío.
     const [curso = '', especialidad = '', nivel = '', paralelo = ''] = (
-      rol === 'animador' ? String(values['cursoKey'] || '') : ''
+      roles.includes('animador') ? String(values['cursoKey'] || '') : ''
     ).split('|');
     const payload: Record<string, unknown> = {
       nombre: values['nombre'],
       correo: values['correo'] || '',
-      rol,
+      roles,
       curso,
       especialidad,
       nivel: nivel ? Number(nivel) : '',
@@ -488,7 +494,7 @@ export class AnimadoresAdmin implements OnInit {
     const resp = await firstValueFrom(
       this.http.post<{ creados: string[]; existentes: string[]; invalidos: string[] }>(
         '/api/animadores/lote',
-        { correos: values['correos'], rol: values['rol'] },
+        { correos: values['correos'], rol: values['roles'] },
       ),
     );
     alert(
@@ -512,7 +518,12 @@ export class AnimadoresAdmin implements OnInit {
 
   /** Abre el formulario de nuevo vendedor con el correo que intentó entrar. */
   protected habilitar(i: IntentoRechazado): void {
-    this.editing.set({ cursoKey: '', rol: 'animador', correo: i.correo, nombre: i.nombre || '' });
+    this.editing.set({
+      cursoKey: '',
+      roles: ['animador'],
+      correo: i.correo,
+      nombre: i.nombre || '',
+    });
   }
 
   protected async descartar(i: IntentoRechazado): Promise<void> {

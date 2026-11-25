@@ -16,6 +16,7 @@ import { firstValueFrom } from 'rxjs';
 import { API_BASE_URL, GOOGLE_CLIENT_ID } from '../core/config';
 import { loadGoogleId } from '../core/google';
 import { errorBody, errorMessage } from '../core/http';
+import { conMensaje } from '../core/loading';
 import { SesionResponse, SessionService, homeFor } from '../core/session';
 import { AccesoExterno } from './acceso-externo';
 import { RegistroEstudiante } from './registro-estudiante';
@@ -175,9 +176,10 @@ export class Login implements AfterViewInit, OnDestroy {
     { rol: 'Administrador', correo: 'admin.demo@uets.edu.ec' },
     { rol: 'Animador', correo: 'animador.demo@uets.edu.ec' },
     { rol: 'Secretaría', correo: 'secretaria.demo@uets.edu.ec' },
-    { rol: 'Financiero', correo: 'financiero.demo@uets.edu.ec' },
+    { rol: 'Financiero + Secretaría', correo: 'financiero.demo@uets.edu.ec' },
     { rol: 'Parroquia', correo: 'parroquia.demo@uets.edu.ec' },
     { rol: 'Oratorio', correo: 'oratorio.demo@uets.edu.ec' },
+    { rol: 'Tecniclub', correo: 'tecniclub.demo@uets.edu.ec' },
     { rol: 'Estudiante', correo: 'estudiante.demo.est@uets.edu.ec' },
   ];
 
@@ -217,7 +219,13 @@ export class Login implements AfterViewInit, OnDestroy {
     this.error.set('');
     try {
       this.entrar(
-        await firstValueFrom(this.http.post<SesionResponse>(`${API_BASE_URL}/demo/externo`, {})),
+        await firstValueFrom(
+          this.http.post<SesionResponse>(
+            `${API_BASE_URL}/demo/externo`,
+            {},
+            { context: conMensaje('Entrando...') },
+          ),
+        ),
       );
     } catch {
       this.error.set('El backend de demo local no está corriendo.');
@@ -234,7 +242,13 @@ export class Login implements AfterViewInit, OnDestroy {
     this.loading.set(true);
     try {
       this.entrar(
-        await firstValueFrom(this.http.post<SesionResponse>('/api/auth/google', { credential })),
+        await firstValueFrom(
+          this.http.post<SesionResponse>(
+            '/api/auth/google',
+            { credential },
+            { context: conMensaje('Validando tu cuenta...') },
+          ),
+        ),
       );
     } catch (err) {
       const body = errorBody<{

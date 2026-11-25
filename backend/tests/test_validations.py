@@ -126,11 +126,12 @@ def test_remove_table_validations(client: FlaskClient, seed: Seed) -> None:
     login_as(client, "admin")
     assert client.delete(url, json={}).status_code == 400
     assert client.delete(url, json={"usuario_id": "xx"}).status_code == 400
-    assert client.delete(url, json={"usuario_id": str(seed.ana)}).status_code == 404  # no le pertenece
+    assert client.delete(url, json={"usuario_id": str(seed.admin)}).status_code == 404  # no le pertenece
+    assert client.delete(url, json={"usuario_id": str(seed.ana)}).status_code == 403  # solo el admin borra
     assert client.delete(url, json={"usuario_id": str(seed.beto)}).status_code == 403
     assert (
         client.delete(
-            f"/api/participante/{MISSING}/tabla/{other_table}/1", json={"usuario_id": str(seed.ana)}
+            f"/api/participante/{MISSING}/tabla/{other_table}/1", json={"usuario_id": str(seed.admin)}
         ).status_code
         == 404
     )
@@ -147,7 +148,9 @@ def test_delete_participant_validations(client: FlaskClient, seed: Seed) -> None
     pid = _participant(client, seed)
     assert client.delete(f"/api/participante/{pid}/1", json={}).status_code == 400
     assert client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.beto)}).status_code == 403
-    assert client.delete(f"/api/participante/{MISSING}/1", json={"usuario_id": str(seed.ana)}).status_code == 404
+    assert client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.ana)}).status_code == 403
+    login_as(client, "admin")
+    assert client.delete(f"/api/participante/{MISSING}/1", json={"usuario_id": str(seed.admin)}).status_code == 404
 
 
 # ------------------------------------------------------------------ lectura

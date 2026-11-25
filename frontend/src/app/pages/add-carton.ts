@@ -6,12 +6,15 @@ import { ArrowLeft, LucideAngularModule, Save } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
 import { errorMessage, isConflict } from '../core/http';
-import { SessionService } from '../core/session';
+import { conMensaje } from '../core/loading';
+import { Cargo, SessionService } from '../core/session';
 import { calcularTotal, textoPromociones } from '../core/tablas';
+import { RolVenta } from '../shared/rol-venta';
+import { VentaParticipante } from './add-user';
 
 @Component({
   selector: 'app-add-carton',
-  imports: [LucideAngularModule],
+  imports: [LucideAngularModule, RolVenta],
   template: `
     <div class="p-6 lg:p-10">
       <button
@@ -35,6 +38,9 @@ import { calcularTotal, textoPromociones } from '../core/tablas';
             Las tablas se entregan en orden: al guardar se asignan las siguientes disponibles de la
             cola.
           </p>
+          <div class="mb-4">
+            <app-rol-venta [(rol)]="rolVenta" [permitidos]="permitidos()" />
+          </div>
           <label class="block text-gray-700 dark:text-gray-300 mb-2" for="cantidad"
             >Cantidad de tablas a añadir</label
           >
@@ -96,6 +102,9 @@ export class AddCarton implements OnInit {
   protected readonly loading = signal(false);
   /** Tablas que el participante ya tiene (la promoción cuenta todas). */
   protected readonly actuales = signal(0);
+  protected readonly rolVenta = signal('');
+  /** Si no le vendió antes (alumno de otro curso), solo puede usar sus roles sin curso. */
+  protected readonly permitidos = signal<Cargo[] | null>(null);
   protected readonly pagadoAntes = computed(() => calcularTotal(this.actuales()));
   protected readonly totalNuevo = computed(() => calcularTotal(this.actuales() + this.cantidad()));
   /** Lo que se cobra ahora: la diferencia, igual que el servidor. */
@@ -107,9 +116,19 @@ export class AddCarton implements OnInit {
   async ngOnInit(): Promise<void> {
     try {
       const resp = await firstValueFrom(
-        this.http.get<{ tablas?: unknown[] }>(`/api/obtenerTablasParticipante/${this.userId()}`),
+        this.http.get<{ participante?: { tablas?: unknown[]; ventas?: VentaParticipante[] } }>(
+          `/api/participante/${this.userId()}`,
+        ),
       );
-      this.actuales.set(resp.tablas?.length || 0);
+      const p = resp.participante;
+      this.actuales.set(p?.tablas?.length || 0);
+      const id = this.session.user()?.id;
+      const propio = (p?.ventas || []).some((v) => v.vendedor === id);
+      this.permitidos.set(
+        propio || this.session.isAdmin()
+          ? null
+          : this.session.cargosVenta().filter((c) => c !== 'animador'),
+      );
     } catch {
       this.actuales.set(0);
     }
@@ -133,7 +152,8 @@ export class AddCarton implements OnInit {
       const resp = await firstValueFrom(
         this.http.post<{ success: boolean; message?: string; seriales?: string[] }>(
           `/api/participante/${this.userId()}/tablas/${user?.tipo_usuario}`,
-          { cantidad, usuario_id: user?.id },
+          { cantidad, usuario_id: user?.id, rol_venta: this.rolVenta() || undefined },
+          { context: conMensaje('Agregando tablas...') },
         ),
       );
       if (resp.success) {

@@ -5,7 +5,9 @@ import { RouterLink } from '@angular/router';
 import { Award, Eye, Loader, LucideAngularModule, Search, X } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
+import { sinCarga } from '../core/loading';
 import { Tabla } from '../core/tablas';
+import { Paginador } from '../shared/paginador';
 
 interface TablaConParticipante extends Tabla {
   timestamp?: number;
@@ -21,7 +23,7 @@ const TH = 'px-6 py-3 text-left text-xs font-semibold text-gray-500';
 
 @Component({
   selector: 'app-carton-search',
-  imports: [RouterLink, LucideAngularModule],
+  imports: [RouterLink, LucideAngularModule, Paginador],
   template: `
     <div class="p-6 lg:p-10">
       <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-1">Buscador de Cartones</h1>
@@ -107,6 +109,12 @@ const TH = 'px-6 py-3 text-left text-xs font-semibold text-gray-500';
           </tbody>
         </table>
       </div>
+      <app-paginador
+        [pagina]="pagina()"
+        [porPagina]="porPagina"
+        [total]="total()"
+        (cambiar)="irA($event)"
+      />
     </div>
   `,
 })
@@ -122,6 +130,10 @@ export class CartonSearch implements OnInit {
   protected readonly search = signal('');
   protected readonly tablas = signal<TablaConParticipante[]>([]);
   protected readonly loading = signal(true);
+  /** Paginación en el servidor: nunca se traen las 25 000 tablas de golpe. */
+  protected readonly porPagina = 50;
+  protected readonly pagina = signal(1);
+  protected readonly total = signal(0);
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
@@ -132,11 +144,19 @@ export class CartonSearch implements OnInit {
     void this.cargar('');
   }
 
-  /** Busca 300 ms después de la última tecla. */
+  /** Busca 300 ms después de la última tecla (desde la primera página). */
   protected cambiar(value: string): void {
     this.search.set(value);
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.cargar(value), 300);
+    this.timer = setTimeout(() => {
+      this.pagina.set(1);
+      void this.cargar(value, true);
+    }, 300);
+  }
+
+  protected irA(pagina: number): void {
+    this.pagina.set(pagina);
+    void this.cargar(this.search());
   }
 
   protected nombre(c: TablaConParticipante): string {
@@ -148,17 +168,29 @@ export class CartonSearch implements OnInit {
     return c.timestamp ? new Date(c.timestamp * 1000).toLocaleDateString() : '-';
   }
 
-  private async cargar(term: string): Promise<void> {
+  /** ``escribiendo``: búsqueda mientras teclea, con el indicador de la tabla y sin bloquear. */
+  private async cargar(term: string, escribiendo = false): Promise<void> {
     this.loading.set(true);
     try {
-      const params: Record<string, string> = term ? { search: term } : {};
+      const params: Record<string, string> = {
+        page: String(this.pagina()),
+        per_page: String(this.porPagina),
+        ...(term ? { search: term } : {}),
+      };
       const resp = await firstValueFrom(
-        this.http.get<{ success: boolean; tablas?: TablaConParticipante[] }>('/api/tablas', {
-          params,
-        }),
+        this.http.get<{
+          success: boolean;
+          tablas?: TablaConParticipante[];
+          total?: number;
+          page?: number;
+        }>('/api/tablas', { params, ...(escribiendo ? { context: sinCarga() } : {}) }),
       );
       // Ignora respuestas de búsquedas ya reemplazadas.
-      if (resp.success && term === this.search()) this.tablas.set(resp.tablas || []);
+      if (resp.success && term === this.search()) {
+        this.tablas.set(resp.tablas || []);
+        this.total.set(resp.total || 0);
+        this.pagina.set(resp.page || 1);
+      }
     } catch (err) {
       console.error('Error al cargar tablas:', err);
     } finally {

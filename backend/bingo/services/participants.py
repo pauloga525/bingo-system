@@ -4,13 +4,19 @@ Invariantes que este servicio mantiene en todos los flujos:
 
 - Una tabla asignada tiene ``stateAsigned=True`` y está en ``tablas`` de
   exactamente un participante.
-- ``Users.usedTables`` = cantidad de tablas en participantes registrados por
-  ese usuario.
-- ``Participantes.total_pagar`` = ``calcular_total(len(tablas))`` y
-  ``Users.total_vendido`` acumula esos montos.
-- Los vendedores con rol distinto de animador (secretaría, financiero,
-  parroquia, oratorio) solo registran participantes de tipo ``externo``.
-  ``rol_vendedor`` guarda el rol de quien vendió (lo usan los reportes).
+- ``Participantes.ventas`` es el registro de cada venta al participante:
+  ``{vendedor, rol, tablas, cantidad, monto, fecha}``. Un participante puede
+  tener ventas de varios vendedores (p. ej. el animador del curso y luego
+  secretaría agrega tablas al mismo alumno). Los documentos antiguos sin
+  ``ventas`` se leen como una sola venta de ``registrado_por``.
+- ``Users.usedTables`` / ``Users.total_vendido`` = tablas y monto de las
+  ventas hechas por ese usuario.
+- ``Participantes.total_pagar`` = ``calcular_total(len(tablas))``; cada venta
+  posterior cobra solo la diferencia.
+- Los roles sin curso (secretaría, financiero, ...) venden a externos y a
+  alumnos; esas ventas quedan con su rol (venta externa del rol, no del curso).
+  Pueden agregar tablas a cualquier alumno. Ver ``domain/roles.py``.
+- Solo el administrador quita tablas o elimina participantes.
 - Toda venta lleva el **correo** del comprador (obligatorio): ahí se le envían
   sus tablas. Si es alumno debe ser su correo institucional y se guarda también
   en su ficha de ``Estudiantes`` (con él inicia sesión y ve sus tablas).
@@ -34,15 +40,14 @@ from pymongo.errors import DuplicateKeyError
 
 from ..db import Collections, Doc
 from ..domain.pricing import calcular_total
-from ..domain.roles import ETIQUETAS, EXTERNO, rol_de, solo_externos
+from ..domain.roles import ADMIN_ROL, ALUMNO, ANIMADOR_ROL, SOLO_EXTERNOS, rol_de, rol_para_venta, roles_de
 from ..errors import ApiError, Conflict, Forbidden, NotFound
-from ..utils import ids_to_str, require_object_id, safe_int, try_object_id
+from ..utils import require_object_id, safe_int, serialize_mongo_doc, try_object_id
 from .queue import TableQueue
 
 ADMIN = 0
 _NOT_ASSIGNED = {"$ne": True}
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-ALUMNO = "alumno"
 
 
 def is_admin(user: Doc) -> bool:
@@ -56,6 +61,46 @@ def table_summary(tabla: Doc) -> dict[str, Any]:
         "matrix": tabla.get("matrix", []),
         "won": tabla.get("won", False),
         "stateAsigned": tabla.get("stateAsigned", False),
+    }
+
+
+def sales_of(participante: Doc, default_rol: str = ANIMADOR_ROL) -> list[Doc]:
+    """Ventas del participante; los documentos antiguos se leen como una sola venta."""
+    ventas = participante.get("ventas")
+    if isinstance(ventas, list):
+        return [dict(v) for v in ventas]
+    tablas = list(participante.get("tablas") or [])
+    if not tablas:
+        return []
+    return [
+        {
+            "vendedor": participante.get("registrado_por"),
+            "rol": participante.get("rol_vendedor") or default_rol,
+            "tablas": tablas,
+            "cantidad": len(tablas),
+            "monto": safe_int(participante.get("total_pagar"), calcular_total(len(tablas))),
+            "fecha": participante.get("fecha_registro", ""),
+        }
+    ]
+
+
+def sold_by(participante: Doc, user_id: Any) -> bool:
+    """``True`` si ``user_id`` registró al participante o le vendió tablas."""
+    if user_id is None:
+        return False
+    if participante.get("registrado_por") == user_id:
+        return True
+    return any(v.get("vendedor") == user_id for v in participante.get("ventas") or [])
+
+
+def _sale(seller_id: Any, rol: str, table_ids: list[ObjectId], monto: int) -> Doc:
+    return {
+        "vendedor": seller_id,
+        "rol": rol,
+        "tablas": list(table_ids),
+        "cantidad": len(table_ids),
+        "monto": monto,
+        "fecha": datetime.now().isoformat(),
     }
 
 
@@ -105,15 +150,30 @@ class ParticipantService:
 
     # ----------------------------------------------------------- permisos
     def _authorize(self, usuario_id: Any, participante: Doc, accion: str) -> Doc:
-        """Valida que ``usuario_id`` sea admin o quien registró al participante.
+        """Valida que ``usuario_id`` pueda atender al participante (ver :meth:`can_attend`).
 
         El tipo de usuario se lee de la base de datos; el ``tipo_usuario`` que
         llega en la URL ya no se usa para autorizar (cualquiera podía enviar 0).
         """
         actor_id = require_object_id(usuario_id, "ID de usuario inválido.")
         actor = self.get_user(actor_id)
-        if not is_admin(actor) and participante.get("registrado_por") != actor_id:
+        if not self.can_attend(actor, participante):
             raise Forbidden(f"No tiene permiso para {accion} este participante.")
+        return actor
+
+    @staticmethod
+    def can_attend(actor: Doc, participante: Doc) -> bool:
+        """Admin, quien le vendió, o un rol sin curso si el participante es alumno."""
+        if is_admin(actor) or sold_by(participante, actor.get("_id")):
+            return True
+        return participante.get("tipo") == ALUMNO and any(r in SOLO_EXTERNOS for r in roles_de(actor))
+
+    def _require_admin(self, usuario_id: Any) -> Doc:
+        if not usuario_id:
+            raise ApiError("Debe proporcionar el ID del usuario.")
+        actor = self.get_user(require_object_id(usuario_id, "ID de usuario inválido."))
+        if not is_admin(actor):
+            raise Forbidden("Solo el administrador puede borrar tablas o participantes.")
         return actor
 
     # ------------------------------------------------------ tablas (bajo nivel)
@@ -190,13 +250,26 @@ class ParticipantService:
         )
 
     @staticmethod
-    def _sale_type(seller: Doc, tipo: Any, default: str = "alumno") -> tuple[str, str]:
-        """``(tipo de participante, rol del vendedor)``; valida que el rol pueda venderle."""
-        rol = rol_de(seller)
-        valor = str(tipo or "").strip().lower() or (EXTERNO if solo_externos(rol) else default)
-        if solo_externos(rol) and valor != EXTERNO:
-            raise Forbidden(f"El rol {ETIQUETAS[rol]} solo puede vender tablas a participantes externos.")
-        return valor, rol
+    def _sale_type(seller: Doc, tipo: Any, rol_pedido: Any = None) -> tuple[str, str]:
+        """``(tipo de participante, rol de la venta)``; valida que el vendedor pueda venderle."""
+        roles = roles_de(seller)
+        sin_curso = ADMIN_ROL not in roles and ANIMADOR_ROL not in roles
+        valor = str(tipo or "").strip().lower() or ("externo" if sin_curso else ALUMNO)
+        return valor, rol_para_venta(roles, valor, rol_pedido)
+
+    def _rol_to_add(self, actor: Doc, participante: Doc, rol_pedido: Any) -> str:
+        """Rol con el que ``actor`` agrega tablas a un participante existente.
+
+        Quien ya le vendió usa cualquiera de sus roles; un rol sin curso que
+        atiende a un alumno ajeno vende con ese rol (venta externa, no del curso).
+        """
+        roles = roles_de(actor)
+        tipo = str(participante.get("tipo") or "")
+        if is_admin(actor) or sold_by(participante, actor["_id"]):
+            return rol_para_venta(roles, tipo, rol_pedido)
+        if not self.can_attend(actor, participante):
+            raise Forbidden("No tiene permiso para modificar este participante.")
+        return rol_para_venta(roles, tipo, rol_pedido, permitidos=sorted(SOLO_EXTERNOS))
 
     # ------------------------------------------------------------- correo
     def clean_sale_email(self, raw: Any, tipo: str, cedula: str) -> str:
@@ -270,7 +343,7 @@ class ParticipantService:
             data["registrado_por"], "El campo 'registrado_por' debe ser un ID de usuario válido."
         )
         seller = self.get_user(seller_id)
-        tipo, rol = self._sale_type(seller, data.get("tipo"))
+        tipo, rol = self._sale_type(seller, data.get("tipo"), data.get("rol_venta"))
         if not nombre:
             raise ApiError("El campo 'nombre' es obligatorio.")
         if not cedula:
@@ -298,6 +371,7 @@ class ParticipantService:
             "paralelo": data.get("paralelo", ""),
             "animador": data.get("animador", ""),
             "tablas": table_ids,
+            "ventas": [_sale(seller_id, rol, table_ids, calcular_total(len(table_ids)))],
             "grupoAdetitss": data.get("grupoAdetitss", ""),
             "fecha_registro": datetime.now().isoformat(),
             "registrado_por": seller_id,
@@ -316,13 +390,7 @@ class ParticipantService:
             raise
         self._update_seller(seller_id, len(table_ids), total_pagar)
         self.save_student_email(tipo, cedula, correo)
-        return {
-            **doc,
-            "_id": str(participant_id),
-            "registrado_por": str(seller_id),
-            "tablas": ids_to_str(table_ids),
-            "seriales": self._serials(table_ids),
-        }
+        return {**serialize_mongo_doc(doc), "seriales": self._serials(table_ids)}
 
     def register_auto(self, data: dict[str, Any]) -> ObjectId:
         """Igual que :meth:`register` tomando de la cola (``cantidad_tablas``, 1 por defecto)."""
@@ -337,11 +405,24 @@ class ParticipantService:
         return sorted(found[t] for t in table_ids if t in found)
 
     # ------------------------------------------------------ modificaciones
+    def _legacy_rol(self, participante: Doc) -> str:
+        seller = self.cols.users.find_one(
+            {"_id": participante.get("registrado_por")}, {"rol": 1, "roles": 1, "tipo_usuario": 1}
+        )
+        return rol_de(seller)
+
     def add_tables(
-        self, participant_id: ObjectId, refs: list[Any], usuario_id: Any, cantidad: Any = 0, allow_serials: bool = False
+        self,
+        participant_id: ObjectId,
+        refs: list[Any],
+        usuario_id: Any,
+        cantidad: Any = 0,
+        allow_serials: bool = False,
+        rol_venta: Any = None,
     ) -> list[str]:
         """Agrega tablas a un participante (de la cola; el admin puede indicar seriales).
 
+        La venta se anota a quien agrega las tablas (``usuario_id``) con su rol.
         Devuelve los seriales agregados.
         """
         if not refs and safe_int(cantidad, 0) <= 0:
@@ -349,35 +430,52 @@ class ParticipantService:
         if not usuario_id:
             raise ApiError("Debe proporcionar el ID del usuario.")
         participante = self.get_participant(participant_id)
-        self._authorize(usuario_id, participante, "modificar")
+        actor_id = require_object_id(usuario_id, "ID de usuario inválido.")
+        rol = self._rol_to_add(self.get_user(actor_id), participante, rol_venta)
 
         table_ids = self._take_tables(allow_serials, refs, cantidad, participant_id)
         old_count = len(participante.get("tablas") or [])
         old_total = safe_int(participante.get("total_pagar"), calcular_total(old_count))
         new_total = calcular_total(old_count + len(table_ids))
-        self.cols.participants.update_one(
-            {"_id": participant_id},
-            {"$addToSet": {"tablas": {"$each": table_ids}}, "$set": {"total_pagar": new_total}},
-        )
-        self._update_seller(participante.get("registrado_por"), len(table_ids), new_total - old_total)
+        venta = _sale(actor_id, rol, table_ids, new_total - old_total)
+        update: dict[str, Any] = {"$addToSet": {"tablas": {"$each": table_ids}}, "$set": {"total_pagar": new_total}}
+        if isinstance(participante.get("ventas"), list):
+            update["$push"] = {"ventas": venta}
+        else:  # documento antiguo: se guarda su venta original y la nueva
+            update["$set"]["ventas"] = [*sales_of(participante, self._legacy_rol(participante)), venta]
+        self.cols.participants.update_one({"_id": participant_id}, update)
+        self._update_seller(actor_id, len(table_ids), new_total - old_total)
         return self._serials(table_ids)
 
     def remove_table(self, participant_id: ObjectId, table_id: ObjectId, usuario_id: Any) -> None:
-        if not usuario_id:
-            raise ApiError("Debe proporcionar el ID del usuario.")
+        """Quita una tabla al participante (solo administrador) y la descuenta a quien la vendió."""
+        self._require_admin(usuario_id)
         participante = self.get_participant(participant_id)
-        self._authorize(usuario_id, participante, "modificar")
         tablas = participante.get("tablas") or []
         if table_id not in tablas:
             raise NotFound("La tabla no pertenece a este participante.")
 
         old_total = safe_int(participante.get("total_pagar"), calcular_total(len(tablas)))
         new_total = calcular_total(len(tablas) - 1)
+        delta = new_total - old_total
+        ventas = sales_of(participante, self._legacy_rol(participante))
+        vendedor = participante.get("registrado_por")
+        for venta in ventas:
+            if table_id in venta["tablas"]:
+                venta["tablas"] = [t for t in venta["tablas"] if t != table_id]
+                venta["cantidad"] = len(venta["tablas"])
+                venta["monto"] = safe_int(venta.get("monto"), 0) + delta
+                vendedor = venta.get("vendedor")
+                break
         self.cols.participants.update_one(
-            {"_id": participant_id}, {"$pull": {"tablas": table_id}, "$set": {"total_pagar": new_total}}
+            {"_id": participant_id},
+            {
+                "$pull": {"tablas": table_id},
+                "$set": {"total_pagar": new_total, "ventas": [v for v in ventas if v["tablas"]]},
+            },
         )
         self.release_tables([table_id])
-        self._update_seller(participante.get("registrado_por"), -1, new_total - old_total)
+        self._update_seller(vendedor, -1, delta)
 
     def remove_table_by_serial(self, participant_id: ObjectId, serial: str, usuario_id: Any) -> None:
         tabla = self.cols.tables.find_one({"serial": serial}, {"_id": 1})
@@ -387,15 +485,14 @@ class ParticipantService:
         self.remove_table(participant_id, tabla["_id"], usuario_id)
 
     def delete(self, participant_id: ObjectId, usuario_id: Any) -> int:
-        """Elimina al participante, libera sus tablas y ajusta contadores. Devuelve tablas liberadas."""
-        if not usuario_id:
-            raise ApiError("Debe proporcionar el ID del usuario.")
+        """Elimina al participante (solo administrador), libera sus tablas y ajusta los
+        contadores de cada vendedor. Devuelve las tablas liberadas."""
+        self._require_admin(usuario_id)
         participante = self.get_participant(participant_id)
-        self._authorize(usuario_id, participante, "eliminar")
         tablas = [t for t in (try_object_id(t) for t in participante.get("tablas") or []) if t is not None]
-        total = safe_int(participante.get("total_pagar"), calcular_total(len(tablas)))
 
         self.release_tables(tablas)
-        self._update_seller(participante.get("registrado_por"), -len(tablas), -total)
+        for venta in sales_of(participante):
+            self._update_seller(venta.get("vendedor"), -len(venta["tablas"]), -safe_int(venta.get("monto"), 0))
         self.cols.participants.delete_one({"_id": participant_id})
         return len(tablas)

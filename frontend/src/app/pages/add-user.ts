@@ -1,4 +1,6 @@
 // Alta de participante (alumno, docente o externo) con sus tablas.
+// Los roles sin curso (secretaría, financiero, ...) también venden a alumnos: la venta queda
+// a nombre de su rol (venta externa, no del curso). Si el alumno ya tiene tablas, se le agregan.
 import { HttpClient } from '@angular/common/http';
 import { Component, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
@@ -6,10 +8,12 @@ import { ArrowLeft, Loader, LucideAngularModule, PlusCircle, Save, Search } from
 import { firstValueFrom } from 'rxjs';
 
 import { errorBody, errorMessage, isConflict } from '../core/http';
-import { SessionService } from '../core/session';
+import { conMensaje, sinCarga } from '../core/loading';
+import { CARGOS, Cargo, SessionService, TipoVenta } from '../core/session';
 import { calcularTotal, textoPromociones } from '../core/tablas';
+import { RolVenta } from '../shared/rol-venta';
 
-type Tipo = 'alumno' | 'docente' | 'externo';
+type Tipo = TipoVenta;
 
 interface Datos {
   nombre: string;
@@ -20,6 +24,29 @@ interface Datos {
   nivelCurso: string;
   paralelo: string;
   grupoAdetitss: string;
+}
+
+/** Venta registrada en el participante (quién vendió, con qué rol y cuántas). */
+export interface VentaParticipante {
+  vendedor: string;
+  vendedor_nombre: string;
+  rol: string;
+  rol_nombre: string;
+  cantidad: number;
+  monto: number;
+  fecha?: string;
+}
+
+/** Participante que ya existe con esa cédula. */
+interface Existente {
+  _id: string;
+  nombre: string;
+  apellido: string;
+  tipo: string;
+  correo: string;
+  puede_agregar: boolean;
+  ventas: VentaParticipante[];
+  tablas: unknown[];
 }
 
 const VACIO: Datos = {
@@ -40,6 +67,7 @@ const NIVEL_BACHILLERATO: Record<string, string> = {
   '2': 'Segundo de Bachillerato',
   '3': 'Tercero de Bachillerato',
 };
+const TIPOS: Record<Tipo, string> = { alumno: 'Alumno', docente: 'Docente', externo: 'Externo' };
 
 const nivelCursoDe = (curso: string, nivel: unknown): string => {
   if (curso === 'BACHILLERATO') return NIVEL_BACHILLERATO[String(nivel)] || '';
@@ -49,7 +77,7 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
 
 @Component({
   selector: 'app-add-user',
-  imports: [LucideAngularModule],
+  imports: [LucideAngularModule, RolVenta],
   template: `
     <div class="flex-grow flex items-center justify-center py-12 px-4">
       <div
@@ -73,30 +101,30 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
         <form (submit)="enviar($event)" class="space-y-6">
           <fieldset>
             <legend [class]="legend">Tipo de Participante</legend>
-            @if (soloExternos()) {
-              <input value="Externo" readonly [class]="input" />
-              <p class="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                Su rol ({{ usuario()?.cargo_nombre }}) solo puede vender tablas a externos.
+            <select [value]="tipo()" (change)="cambiarTipo($event)" [class]="input">
+              @for (t of tipos(); track t) {
+                <option [value]="t" [selected]="t === tipo()">{{ nombreTipo[t] }}</option>
+              }
+            </select>
+          </fieldset>
+
+          <app-rol-venta [(rol)]="rolVenta" [permitidos]="permitidosRol()" />
+
+          <fieldset>
+            <legend [class]="legend">Vendedor</legend>
+            <input
+              [value]="(usuario()?.nombres || '') + ' · ' + nombreRol(rolEfectivo())"
+              readonly
+              class="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300"
+            />
+            @if (tipo() === 'alumno' && rolEfectivo() !== 'animador' && rolEfectivo() !== 'admin') {
+              <p class="text-sm text-blue-700 dark:text-blue-300 mt-2">
+                Venta externa de {{ nombreRol(rolEfectivo()) }}: cuenta para su rol, no para el
+                curso del alumno.
               </p>
-            } @else {
-              <select [value]="tipo()" (change)="cambiarTipo($event)" [class]="input">
-                <option value="alumno">Alumno</option>
-                <option value="docente">Docente</option>
-                <option value="externo">Externo</option>
-              </select>
             }
           </fieldset>
 
-          @if (tipo() === 'alumno') {
-            <fieldset>
-              <legend [class]="legend">Nombre del Animador</legend>
-              <input
-                [value]="usuario()?.nombres || ''"
-                readonly
-                class="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300"
-              />
-            </fieldset>
-          }
           @if (tipo() === 'docente') {
             <fieldset>
               <legend [class]="legend">Número de grupo ADETITSS</legend>
@@ -117,7 +145,7 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
                 <div class="relative flex-1">
                   <input
                     [value]="datos().cedula"
-                    (input)="set('cedula', $event)"
+                    (input)="setCedula($event)"
                     placeholder="Cédula (Ej. 0123456789)"
                     [class]="input"
                   />
@@ -144,12 +172,14 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
               <input
                 [value]="datos().nombre"
                 (input)="set('nombre', $event)"
+                [readonly]="!!existente()"
                 placeholder="Nombre (Ej. Sofía)"
                 [class]="input"
               />
               <input
                 [value]="datos().apellido"
                 (input)="set('apellido', $event)"
+                [readonly]="!!existente()"
                 placeholder="Apellido (Ej. Rodríguez)"
                 [class]="input"
               />
@@ -157,6 +187,7 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
                 type="tel"
                 [value]="datos().celular"
                 (input)="set('celular', $event)"
+                [readonly]="!!existente()"
                 placeholder="Número de Celular (Ej. 0987654321)"
                 [class]="input"
               />
@@ -166,6 +197,7 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
                   required
                   [value]="datos().correo"
                   (input)="set('correo', $event)"
+                  [readonly]="!!existente()"
                   [placeholder]="
                     tipo() === 'alumno'
                       ? 'Correo institucional (nombre.apellido.est@uets.edu.ec)'
@@ -174,7 +206,10 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
                   [class]="input"
                 />
                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  @if (tipo() === 'alumno') {
+                  @if (existente()) {
+                    Las tablas se envían al correo que ya tiene registrado. Para cambiarlo use
+                    "Cambiar correo" en sus cartones.
+                  } @else if (tipo() === 'alumno') {
                     Obligatorio. Se carga al buscar la cédula; corríjalo o agréguelo si está mal o
                     falta. Con este correo el estudiante entra al sistema y ve sus tablas.
                   } @else {
@@ -184,6 +219,34 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
               </div>
             </div>
           </fieldset>
+
+          @if (existente(); as e) {
+            <div
+              class="rounded-lg border p-4 text-sm"
+              [class]="
+                e.puede_agregar
+                  ? 'border-amber-400 bg-amber-50 text-amber-900 dark:bg-amber-900/20 dark:text-amber-200'
+                  : 'border-red-400 bg-red-50 text-red-800 dark:bg-red-900/20 dark:text-red-200'
+              "
+            >
+              <p class="font-semibold">
+                {{ e.nombre }} {{ e.apellido }} ya está registrado con {{ e.tablas.length }}
+                tabla(s).
+              </p>
+              @for (v of e.ventas; track $index) {
+                <p>
+                  · {{ v.cantidad }} vendida(s) por {{ v.vendedor_nombre }} ({{ v.rol_nombre }})
+                </p>
+              }
+              @if (e.puede_agregar) {
+                <p class="mt-2">Al guardar se le <strong>agregan</strong> las nuevas tablas.</p>
+              } @else {
+                <p class="mt-2">
+                  Solo quien le vendió (o un rol sin curso, si es alumno) puede agregarle tablas.
+                </p>
+              }
+            </div>
+          }
 
           @if (tipo() === 'alumno') {
             <fieldset>
@@ -241,6 +304,12 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
             <p class="text-gray-700 dark:text-gray-300 text-lg">
               Total a pagar: <span class="font-bold text-green-600">\${{ totalPagar() }}</span>
             </p>
+            @if (existente(); as e) {
+              <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                Ya tiene {{ e.tablas.length }} tabla(s); con estas quedan
+                {{ e.tablas.length + cantidad() }} (la promoción cuenta todas).
+              </p>
+            }
             @if (promociones()) {
               <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">{{ promociones() }}</p>
             }
@@ -248,11 +317,17 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
 
           <button
             type="submit"
-            [disabled]="guardando()"
+            [disabled]="guardando() || (!!existente() && !existente()?.puede_agregar)"
             class="w-full bg-blue-600 text-white py-3 rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-blue-700 disabled:opacity-60"
           >
             <lucide-icon [img]="SaveIcon" [size]="20" />
-            {{ guardando() ? 'Guardando...' : 'Crear Participante' }}
+            {{
+              guardando()
+                ? 'Guardando...'
+                : existente()
+                  ? 'Agregar tablas al participante'
+                  : 'Crear Participante'
+            }}
           </button>
         </form>
       </div>
@@ -270,13 +345,20 @@ export class AddUser {
   protected readonly SearchIcon = Search;
   protected readonly input = INPUT;
   protected readonly legend = LEGEND;
+  protected readonly nombreTipo = TIPOS;
 
   protected readonly usuario = this.session.user;
 
-  /** Secretaría, financiero, parroquia y oratorio solo venden a externos. */
-  protected readonly soloExternos = this.session.soloExternos;
-  protected readonly tipo = signal<Tipo>(this.session.soloExternos() ? 'externo' : 'alumno');
+  /** Tipos que puede vender según sus roles (docente: solo con rol animador). */
+  protected readonly tipos = this.session.tiposVenta;
+  protected readonly tipo = signal<Tipo>(
+    this.session.tieneCurso() || this.session.isAdmin() ? 'alumno' : 'externo',
+  );
+  /** Rol con que se registra la venta ('' = el que corresponda por defecto). */
+  protected readonly rolVenta = signal('');
   protected readonly datos = signal<Datos>({ ...VACIO });
+  /** Participante que ya existe con la cédula buscada (se le agregan tablas). */
+  protected readonly existente = signal<Existente | null>(null);
   /** Cantidad de tablas que se venden (se toman de la cola al guardar). */
   protected readonly cantidad = signal(1);
   protected readonly rapidas = [1, 2, 5, 10];
@@ -285,11 +367,46 @@ export class AddUser {
   protected readonly buscando = signal(false);
   protected readonly guardando = signal(false);
 
-  protected readonly totalPagar = computed(() => calcularTotal(this.cantidad()));
-  protected readonly promociones = computed(() => textoPromociones(this.cantidad()));
+  /** Roles que puede usar en esta venta: docentes solo como animador; alumnos ajenos sin curso. */
+  protected readonly permitidosRol = computed<Cargo[] | null>(() => {
+    const cargos = this.session.cargosVenta();
+    if (this.tipo() === 'docente') return ['animador'];
+    const e = this.existente();
+    const id = this.usuario()?.id;
+    if (e && !e.ventas.some((v) => v.vendedor === id)) {
+      return cargos.filter((c) => c !== 'animador');
+    }
+    return null;
+  });
+
+  /** Rol que quedará en la venta (misma regla que el servidor si no se elige). */
+  protected readonly rolEfectivo = computed<string>(() => {
+    if (this.session.isAdmin()) return 'admin';
+    const permitidos = this.permitidosRol();
+    const opciones = this.session
+      .cargosVenta()
+      .filter((c) => !permitidos || permitidos.includes(c));
+    const elegido = this.rolVenta();
+    if (elegido && (opciones as string[]).includes(elegido)) return elegido;
+    if (this.tipo() !== 'externo' && opciones.includes('animador')) return 'animador';
+    return opciones[0] || '';
+  });
+
+  private readonly yaTiene = computed(() => this.existente()?.tablas.length || 0);
+  protected readonly totalPagar = computed(
+    () => calcularTotal(this.yaTiene() + this.cantidad()) - calcularTotal(this.yaTiene()),
+  );
+  protected readonly promociones = computed(() =>
+    textoPromociones(this.yaTiene() + this.cantidad()),
+  );
 
   constructor() {
     void this.verCola();
+  }
+
+  protected nombreRol(rol: string): string {
+    if (rol === 'admin') return 'Administrador';
+    return CARGOS[rol as Exclude<Cargo, 'admin'>] || rol;
   }
 
   protected setCantidad(event: Event): void {
@@ -299,7 +416,7 @@ export class AddUser {
     void this.verCola();
   }
 
-  /** Vista previa de las tablas que tocarían ahora (no las aparta). */
+  /** Vista previa de las tablas que tocarían ahora (no las aparta). Consulta en segundo plano. */
   protected async verCola(): Promise<void> {
     const n = this.cantidad();
     this.vistaPrevia.set('');
@@ -307,9 +424,11 @@ export class AddUser {
     if (n <= 0) return;
     try {
       const resp = await firstValueFrom(
-        this.http.post<{ tablas_consecutivas?: string[] }>('/api/obtenerTablasConsecutivas', {
-          cantidad_tablas: n,
-        }),
+        this.http.post<{ tablas_consecutivas?: string[] }>(
+          '/api/obtenerTablasConsecutivas',
+          { cantidad_tablas: n },
+          { context: sinCarga() },
+        ),
       );
       if (n !== this.cantidad()) return; // cambió mientras respondía
       const t = resp.tablas_consecutivas || [];
@@ -328,10 +447,43 @@ export class AddUser {
     this.datos.update((d) => ({ ...d, [campo]: value }));
   }
 
+  /** Cambiar la cédula descarta el participante encontrado antes. */
+  protected setCedula(event: Event): void {
+    this.set('cedula', event);
+    if (this.existente()) {
+      this.existente.set(null);
+      this.datos.update((d) => ({ ...VACIO, cedula: d.cedula }));
+    }
+  }
+
   /** Al cambiar el tipo se reinicia todo el formulario. */
   protected cambiarTipo(event: Event): void {
     this.tipo.set((event.target as HTMLSelectElement).value as Tipo);
     this.datos.set({ ...VACIO });
+    this.existente.set(null);
+  }
+
+  /** ¿Ya hay un participante con esta cédula? (404 = no). */
+  private async buscarExistente(cedula: string): Promise<void> {
+    try {
+      const resp = await firstValueFrom(
+        this.http.get<{ participante?: Existente }>(`/api/participante/cedula/${cedula}`, {
+          context: conMensaje('Buscando si ya tiene tablas...'),
+        }),
+      );
+      const e = resp.participante || null;
+      this.existente.set(e);
+      if (e) {
+        this.datos.update((v) => ({
+          ...v,
+          nombre: e.nombre || v.nombre,
+          apellido: e.apellido || v.apellido,
+          correo: e.correo || v.correo,
+        }));
+      }
+    } catch {
+      this.existente.set(null);
+    }
   }
 
   protected async buscarPersona(): Promise<void> {
@@ -344,6 +496,7 @@ export class AddUser {
         const resp = await firstValueFrom(
           this.http.get<{ success: boolean; docente?: Record<string, string> }>(
             `/api/docente/${cedula}`,
+            { context: conMensaje('Buscando docente...') },
           ),
         );
         const d = resp.docente;
@@ -359,6 +512,7 @@ export class AddUser {
         const resp = await firstValueFrom(
           this.http.get<{ success: boolean; estudiante?: Record<string, string> }>(
             `/api/estudiante/${cedula}`,
+            { context: conMensaje('Buscando estudiante...') },
           ),
         );
         const e = resp.estudiante;
@@ -374,6 +528,7 @@ export class AddUser {
           }));
         }
       }
+      await this.buscarExistente(cedula);
     } catch (err) {
       const status = (err as { status?: number }).status;
       alert(
@@ -384,6 +539,27 @@ export class AddUser {
     } finally {
       this.buscando.set(false);
     }
+  }
+
+  /** El participante ya tiene tablas: se le agregan (la venta queda a nombre de quien vende). */
+  private async agregarAExistente(e: Existente, cantidad: number): Promise<void> {
+    const user = this.usuario();
+    const resp = await firstValueFrom(
+      this.http.post<{ success: boolean; message?: string; seriales?: string[] }>(
+        `/api/participante/${e._id}/tablas/${user?.tipo_usuario}`,
+        { cantidad, usuario_id: user?.id, rol_venta: this.rolVenta() || undefined },
+        { context: conMensaje('Agregando tablas...') },
+      ),
+    );
+    if (!resp.success) {
+      alert(resp.message || 'Error al agregar tablas');
+      return;
+    }
+    alert(
+      `Tablas agregadas a ${e.nombre} ${e.apellido}: ${(resp.seriales || []).join(', ')}\n` +
+        `Cobrar: $${this.totalPagar()}\nSe envía por correo la lista actualizada de tablas.`,
+    );
+    void this.router.navigate(['/admin/user', e._id, 'cartones']);
   }
 
   protected async enviar(event: Event): Promise<void> {
@@ -399,12 +575,14 @@ export class AddUser {
     const user = this.usuario();
     const d = this.datos();
     const tipo = this.tipo();
+    const existente = this.existente();
     const correo = d.correo.trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)) {
+    if (!existente && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)) {
       alert('Ingrese un correo válido: ahí se envían las tablas.');
       return;
     }
     if (
+      !existente &&
       tipo === 'alumno' &&
       !/(\.est|_?estudiante)@uets\.edu\.ec$|@est\.uets\.edu\.ec$/.test(correo)
     ) {
@@ -413,25 +591,34 @@ export class AddUser {
     }
     this.guardando.set(true);
     try {
+      if (existente) {
+        await this.agregarAExistente(existente, cantidad);
+        return;
+      }
       const resp = await firstValueFrom(
         this.http.post<{
           success: boolean;
           message?: string;
           participante?: { seriales?: string[]; total_pagar?: number };
-        }>('/api/CreateParticipantes', {
-          nombre: d.nombre,
-          apellido: d.apellido,
-          cedula: d.cedula,
-          correo,
-          celular: d.celular,
-          tipo,
-          nivelCurso: tipo === 'alumno' ? d.nivelCurso : '',
-          paralelo: tipo === 'alumno' ? d.paralelo : '',
-          animador: user?.nombres,
-          grupoAdetitss: d.grupoAdetitss,
-          cantidad_tablas: cantidad,
-          registrado_por: user?.id,
-        }),
+        }>(
+          '/api/CreateParticipantes',
+          {
+            nombre: d.nombre,
+            apellido: d.apellido,
+            cedula: d.cedula,
+            correo,
+            celular: d.celular,
+            tipo,
+            rol_venta: this.rolVenta() || undefined,
+            nivelCurso: tipo === 'alumno' ? d.nivelCurso : '',
+            paralelo: tipo === 'alumno' ? d.paralelo : '',
+            animador: user?.nombres,
+            grupoAdetitss: d.grupoAdetitss,
+            cantidad_tablas: cantidad,
+            registrado_por: user?.id,
+          },
+          { context: conMensaje('Registrando la venta...') },
+        ),
       );
       if (resp.success) {
         const seriales = resp.participante?.seriales || [];
@@ -446,15 +633,16 @@ export class AddUser {
       }
     } catch (err) {
       if (isConflict(err)) {
-        // Otra venta se llevó las tablas o la cédula ya fue registrada: avisar y refrescar la cola.
-        const body = errorBody<{ sin_tablas?: boolean }>(err);
+        // Otra venta se llevó las tablas o la cédula ya fue registrada: avisar y refrescar.
+        const body = errorBody<{ sin_tablas?: boolean; cedula_registrada?: boolean }>(err);
         alert(
           errorMessage(err, 'Otro vendedor acaba de vender esas tablas.') +
             (body?.sin_tablas ? '\nSe actualizó la vista previa de la cola.' : ''),
         );
+        if (body?.cedula_registrada) await this.buscarExistente(d.cedula.trim());
         void this.verCola();
       } else {
-        alert(errorMessage(err, 'Error al crear el participante. Por favor, intente nuevamente.'));
+        alert(errorMessage(err, 'Error al guardar la venta. Por favor, intente nuevamente.'));
       }
     } finally {
       this.guardando.set(false);

@@ -101,10 +101,8 @@ export class AdminLayout {
     { path: '/admin/users', label: 'Participantes' },
     { path: '/admin/buscar-participante', label: 'Buscar' },
     { path: '/admin/cartones', label: 'Cartones' },
-    // Solo los animadores tienen curso; los demás roles venden a externos.
-    ...(this.session.cargo() === 'animador'
-      ? [{ path: '/admin/mi-curso', label: 'Mi curso' }]
-      : []),
+    // Solo quien tiene el rol animador tiene curso.
+    ...(this.session.tieneCurso() ? [{ path: '/admin/mi-curso', label: 'Mi curso' }] : []),
     ...(this.session.veReportes() ? [{ path: '/admin/reportes', label: 'Reportes' }] : []),
     ...(this.session.isAdmin()
       ? [

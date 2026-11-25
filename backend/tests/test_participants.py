@@ -114,10 +114,12 @@ def test_sales_take_consecutive_tables_from_the_queue(client: FlaskClient, cols:
     r3 = _vender(client, "ana", seed.ana, "04", 2)
     assert r3.json["participante"]["seriales"] == ["CARD00007", "CARD00009"]
 
-    # Si se libera una venta, sus tablas vuelven a la cola.
+    # Si se libera una venta (solo el admin borra), sus tablas vuelven a la cola.
     login_as(client, "beto")
     pid = r2.json["participante"]["_id"]
-    assert client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.beto)}).status_code == 200
+    assert client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.beto)}).status_code == 403
+    login_as(client, "admin")
+    assert client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.admin)}).status_code == 200
     assert client.get("/api/cola-tablas").json["siguiente"] == "CARD00005"
 
     # No alcanzan las tablas: no se asigna nada.
@@ -197,7 +199,11 @@ def test_animator_cannot_add_specific_tables(client: FlaskClient, seed: Seed) ->
 def test_remove_table_updates_everything(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     pid = _participant_id(client, seed.ana, "0101", ["CARD00001", "CARD00002"])
     tid = seed.tables["CARD00002"]
-    resp = client.delete(f"/api/participante/{pid}/tabla/{tid}/1", json={"usuario_id": str(seed.ana)})
+    url = f"/api/participante/{pid}/tabla/{tid}/1"
+    resp = client.delete(url, json={"usuario_id": str(seed.ana)})
+    assert resp.status_code == 403 and "administrador" in resp.json["message"]
+    login_as(client, "admin")
+    resp = client.delete(url, json={"usuario_id": str(seed.admin)})
     assert resp.status_code == 200, resp.json
     assert cols.tables.find_one({"_id": tid})["stateAsigned"] is False  # type: ignore[index]
     assert cols.participants.find_one({})["total_pagar"] == 3  # type: ignore[index]
@@ -207,8 +213,10 @@ def test_remove_table_updates_everything(client: FlaskClient, cols: Collections,
 
 def test_eliminar_tabla_asignada_by_serial_now_works(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     pid = _participant_id(client, seed.ana, "0101", ["CARD00001", "CARD00002"])
+    login_as(client, "admin")
     resp = client.post(
-        "/api/eliminarTablaAsignada", json={"participante_id": pid, "serial": "CARD00001", "usuario_id": str(seed.ana)}
+        "/api/eliminarTablaAsignada",
+        json={"participante_id": pid, "serial": "CARD00001", "usuario_id": str(seed.admin)},
     )
     assert resp.status_code == 200, resp.json
     assert _user(cols, seed.ana)["usedTables"] == 1
@@ -216,7 +224,9 @@ def test_eliminar_tabla_asignada_by_serial_now_works(client: FlaskClient, cols: 
 
 def test_delete_participant_releases_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     pid = _participant_id(client, seed.ana, "0101", ["CARD00001", "CARD00002"])
-    resp = client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.ana)})
+    assert client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.ana)}).status_code == 403
+    login_as(client, "admin")
+    resp = client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.admin)})
     assert resp.status_code == 200
     assert resp.json["tablas_liberadas"] == 2
     assert cols.tables.count_documents({"stateAsigned": True}) == 0
@@ -226,7 +236,9 @@ def test_delete_participant_releases_tables(client: FlaskClient, cols: Collectio
 
 def test_register_auto_picks_free_reserved_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     pid = _participant_id(client, seed.ana, "0101", ["CARD00001", "CARD00002"])
-    client.delete(f"/api/participante/{pid}/tabla/{seed.tables['CARD00001']}/1", json={"usuario_id": str(seed.ana)})
+    login_as(client, "admin")
+    client.delete(f"/api/participante/{pid}/tabla/{seed.tables['CARD00001']}/1", json={"usuario_id": str(seed.admin)})
+    login_as(client, "ana")
     resp = client.post(
         "/api/registrarParticipanteAuto",
         json={

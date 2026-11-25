@@ -73,7 +73,7 @@ def test_crear_vendedor_con_rol(admin: FlaskClient, cols: Collections) -> None:
         "/api/animadores",
         json={"nombre": "x", "rol": "financiero", "curso": "BACHILLERATO", "nivel": 2, "paralelo": "C"},
     )
-    assert resp.status_code == 400 and "Solo los animadores" in resp.json["message"]
+    assert resp.status_code == 400 and "Solo el rol Animador" in resp.json["message"]
     assert admin.post("/api/animadores", json={"nombre": "x", "rol": "jefe"}).status_code == 400
 
     # Buscar por rol.
@@ -116,8 +116,8 @@ def test_perfil_y_venta_solo_externos(admin: FlaskClient, cols: Collections, see
         "registrado_por": uid,
         "cantidad_tablas": 2,
     }
-    resp = admin.post("/api/registrarParticipante", json={**body, "tipo": "alumno"})
-    assert resp.status_code == 403 and "externos" in resp.json["message"]
+    resp = admin.post("/api/registrarParticipante", json={**body, "tipo": "docente"})
+    assert resp.status_code == 403 and "alumnos y externos" in resp.json["message"]
     resp = admin.post("/api/registrarParticipante", json={**body, "tipo": "externo"})
     assert resp.status_code == 201, resp.json
     p = cols.participants.find_one({"cedula": "0999999991"})
@@ -202,7 +202,7 @@ def test_reportes_por_rol_vendedor_y_promociones(admin: FlaskClient, cols: Colle
     assert promos["suelta"]["cantidad"] == 1 and promos["suelta"]["precio"] == 3
 
     roles = {r["rol"]: r for r in rep["ventas_por_rol"]}
-    assert set(roles) == {"animador", "secretaria", "financiero", "parroquia", "oratorio", "admin"}
+    assert set(roles) == {"animador", "secretaria", "financiero", "parroquia", "oratorio", "tecniclub", "admin"}
     assert roles["animador"]["tablas"] == 8 and roles["animador"]["monto"] == 18
     assert roles["animador"]["participantes"] == 2 and roles["animador"]["vendedores"] == 2
     assert roles["secretaria"]["tablas"] == 0 and roles["secretaria"]["vendedores"] == 1

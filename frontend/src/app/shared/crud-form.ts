@@ -7,7 +7,8 @@ import { errorMessage } from '../core/http';
 export interface CrudField {
   name: string;
   label: string;
-  type?: 'text' | 'email' | 'number' | 'select';
+  /** 'checks': casillas de varias opciones; el valor es una lista. */
+  type?: 'text' | 'email' | 'number' | 'select' | 'checks';
   required?: boolean;
   /** Opciones de una lista (type 'select'). */
   options?: CrudOption[];
@@ -39,34 +40,64 @@ export type CrudValues = Record<string, unknown>;
         </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
           @for (f of fields(); track f.name) {
-            <label class="text-sm text-gray-700 dark:text-gray-200" [class.sm:col-span-2]="f.wide">
-              {{ f.label }}
-              @if (f.required) {
-                <span class="text-red-500"> *</span>
-              }
-              @if (f.type === 'select') {
-                <select
-                  [required]="!!f.required"
-                  (change)="set(f.name, $event)"
-                  class="mt-1 w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2"
-                >
-                  @for (o of f.options || []; track o.value) {
-                    <option [value]="o.value" [selected]="o.value === valueOf(f.name)">
-                      {{ o.label }}
-                    </option>
+            @if (f.type === 'checks') {
+              <fieldset
+                class="text-sm text-gray-700 dark:text-gray-200"
+                [class.sm:col-span-2]="f.wide"
+              >
+                <legend>
+                  {{ f.label }}
+                  @if (f.required) {
+                    <span class="text-red-500"> *</span>
                   }
-                </select>
-              } @else {
-                <input
-                  [type]="f.type || 'text'"
-                  [required]="!!f.required"
-                  [placeholder]="f.placeholder || ''"
-                  [value]="valueOf(f.name)"
-                  (input)="set(f.name, $event)"
-                  class="mt-1 w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2"
-                />
-              }
-            </label>
+                </legend>
+                <div class="mt-1 flex flex-wrap gap-x-4 gap-y-2">
+                  @for (o of f.options || []; track o.value) {
+                    <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        [checked]="marcado(f.name, o.value)"
+                        (change)="alternar(f.name, o.value, $event)"
+                        class="h-4 w-4"
+                      />
+                      {{ o.label }}
+                    </label>
+                  }
+                </div>
+              </fieldset>
+            } @else {
+              <label
+                class="text-sm text-gray-700 dark:text-gray-200"
+                [class.sm:col-span-2]="f.wide"
+              >
+                {{ f.label }}
+                @if (f.required) {
+                  <span class="text-red-500"> *</span>
+                }
+                @if (f.type === 'select') {
+                  <select
+                    [required]="!!f.required"
+                    (change)="set(f.name, $event)"
+                    class="mt-1 w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2"
+                  >
+                    @for (o of f.options || []; track o.value) {
+                      <option [value]="o.value" [selected]="o.value === valueOf(f.name)">
+                        {{ o.label }}
+                      </option>
+                    }
+                  </select>
+                } @else {
+                  <input
+                    [type]="f.type || 'text'"
+                    [required]="!!f.required"
+                    [placeholder]="f.placeholder || ''"
+                    [value]="valueOf(f.name)"
+                    (input)="set(f.name, $event)"
+                    class="mt-1 w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2"
+                  />
+                }
+              </label>
+            }
           }
         </div>
         @if (error()) {
@@ -114,6 +145,22 @@ export class CrudForm implements OnInit {
     return v === null || v === undefined ? '' : String(v);
   }
 
+  protected marcado(name: string, value: string): boolean {
+    const v = this.values()[name];
+    return Array.isArray(v) && v.includes(value);
+  }
+
+  protected alternar(name: string, value: string, event: Event): void {
+    const on = (event.target as HTMLInputElement).checked;
+    this.values.update((v) => {
+      const actual = Array.isArray(v[name]) ? (v[name] as string[]) : [];
+      const lista = on
+        ? [...actual.filter((x) => x !== value), value]
+        : actual.filter((x) => x !== value);
+      return { ...v, [name]: lista };
+    });
+  }
+
   protected set(name: string, event: Event): void {
     const value = (event.target as HTMLInputElement | HTMLSelectElement).value;
     this.values.update((v) => ({ ...v, [name]: value }));
@@ -122,6 +169,13 @@ export class CrudForm implements OnInit {
   protected async submit(event: Event): Promise<void> {
     event.preventDefault();
     this.error.set('');
+    const vacio = this.fields().find(
+      (f) => f.type === 'checks' && f.required && !(this.values()[f.name] as unknown[])?.length,
+    );
+    if (vacio) {
+      this.error.set(`Elija al menos una opción en "${vacio.label}".`);
+      return;
+    }
     this.saving.set(true);
     try {
       await this.save()(this.values());

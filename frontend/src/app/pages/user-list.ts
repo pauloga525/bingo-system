@@ -2,11 +2,14 @@
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
-import { Edit, Loader, LucideAngularModule, Plus, Search, Trash2 } from 'lucide-angular';
+import { Edit, Loader, LucideAngularModule, Plus, Printer, Search, Trash2 } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
 import { errorMessage } from '../core/http';
+import { imprimirTablas } from '../core/imprimir';
+import { conMensaje } from '../core/loading';
 import { SessionService } from '../core/session';
+import { Paginador } from '../shared/paginador';
 
 export interface Participante {
   _id: string;
@@ -48,7 +51,7 @@ const TH = 'px-6 py-3 text-left text-xs font-semibold uppercase text-gray-500 da
 
 @Component({
   selector: 'app-user-list',
-  imports: [RouterLink, LucideAngularModule],
+  imports: [RouterLink, LucideAngularModule, Paginador],
   template: `
     @if (loading()) {
       <div class="p-6 lg:p-10 flex items-center justify-center min-h-[60vh]">
@@ -98,7 +101,7 @@ const TH = 'px-6 py-3 text-left text-xs font-semibold uppercase text-gray-500 da
           <input
             type="text"
             [value]="search()"
-            (input)="search.set($any($event.target).value)"
+            (input)="search.set($any($event.target).value); pagina.set(1)"
             placeholder="Buscar participantes por nombre, apellido o cédula"
             class="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
@@ -120,7 +123,7 @@ const TH = 'px-6 py-3 text-left text-xs font-semibold uppercase text-gray-500 da
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
-              @for (p of filtrados(); track p._id) {
+              @for (p of paginaActual(); track p._id) {
                 <tr>
                   <td class="px-6 py-4 text-sm font-medium text-gray-900 dark:text-white">
                     {{ p.nivelCurso || '-' }}
@@ -150,11 +153,22 @@ const TH = 'px-6 py-3 text-left text-xs font-semibold uppercase text-gray-500 da
                       </a>
                       <button
                         type="button"
-                        (click)="eliminar(p)"
-                        class="flex items-center gap-1 text-red-600 hover:underline"
+                        (click)="imprimir(p)"
+                        [disabled]="!(p.tablas || []).length"
+                        class="flex items-center gap-1 text-gray-700 dark:text-gray-200 hover:underline disabled:opacity-40"
                       >
-                        <lucide-icon [img]="TrashIcon" [size]="16" /> Borrar
+                        <lucide-icon [img]="PrinterIcon" [size]="16" /> Imprimir
                       </button>
+                      <!-- Solo el administrador borra participantes (y sus tablas). -->
+                      @if (isAdmin()) {
+                        <button
+                          type="button"
+                          (click)="eliminar(p)"
+                          class="flex items-center gap-1 text-red-600 hover:underline"
+                        >
+                          <lucide-icon [img]="TrashIcon" [size]="16" /> Borrar
+                        </button>
+                      }
                     </div>
                   </td>
                 </tr>
@@ -168,6 +182,12 @@ const TH = 'px-6 py-3 text-left text-xs font-semibold uppercase text-gray-500 da
             </tbody>
           </table>
         </div>
+        <app-paginador
+          [pagina]="pagina()"
+          [porPagina]="porPagina"
+          [total]="filtrados().length"
+          (cambiar)="pagina.set($event)"
+        />
       </div>
     }
   `,
@@ -181,6 +201,9 @@ export class UserList implements OnInit {
   protected readonly SearchIcon = Search;
   protected readonly EditIcon = Edit;
   protected readonly TrashIcon = Trash2;
+  protected readonly PrinterIcon = Printer;
+  protected readonly porPagina = 25;
+  protected readonly pagina = signal(1);
   protected readonly th = TH;
 
   protected readonly isAdmin = this.session.isAdmin;
@@ -201,8 +224,21 @@ export class UserList implements OnInit {
     );
   });
 
+  protected readonly paginaActual = computed(() => {
+    const desde = (this.pagina() - 1) * this.porPagina;
+    return this.filtrados().slice(desde, desde + this.porPagina);
+  });
+
   ngOnInit(): void {
     void this.cargar(true);
+  }
+
+  protected async imprimir(p: Participante): Promise<void> {
+    try {
+      await imprimirTablas(this.http, p.cedula || '');
+    } catch (err) {
+      alert(errorMessage(err, 'No se pudieron preparar las tablas para imprimir.'));
+    }
   }
 
   private get userId(): string {
@@ -248,7 +284,7 @@ export class UserList implements OnInit {
       const resp = await firstValueFrom(
         this.http.delete<{ success: boolean; message?: string }>(
           `/api/participante/${p._id}/${user?.tipo_usuario}`,
-          { body: { usuario_id: user?.id } },
+          { body: { usuario_id: user?.id }, context: conMensaje('Eliminando participante...') },
         ),
       );
       if (resp.success) {

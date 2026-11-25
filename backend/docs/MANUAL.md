@@ -138,7 +138,7 @@ La pantalla de inicio tiene dos opciones:
 | --- | --- | --- |
 | **Administrador** | `admin@uets.edu.ec` (variable `BINGO_ADMIN_EMAILS`) | Todo: participantes, tablas, reportes, **Vendedores**, **Estudiantes**, mantenimiento |
 | **Animador** | Está en la **lista oficial del DECE** (5.1) o el admin le pone su correo en **Vendedores** | Sus participantes (vende tablas de la cola) y **Mi curso** (los alumnos de su paralelo) |
-| **Secretaría, Financiero, Parroquia, Oratorio** | El admin los crea en **Vendedores** (uno a uno o varios por correo) | Sus participantes (solo externos) |
+| **Secretaría, Financiero, Parroquia, Oratorio, Tecniclub** | El admin los crea en **Vendedores** (uno a uno o varios por correo) | Sus participantes (externos y alumnos) |
 | **Estudiante** | Se registra solo la primera vez (ver abajo) | Únicamente **Mis tablas** (con descarga en PDF) |
 | **Comprador externo** | No necesita cuenta | **Público general**: cédula + correo + código → ve/descarga **solo sus** tablas |
 
@@ -153,10 +153,12 @@ con las columnas Docente, Correo, Nivel, Curso, Especialidad, Paralelo). La vist
 nuevos, cambios de correo/curso, quiénes **pierden el acceso** (animadores que no están en la lista) y
 filas con problemas. Para aplicar escriba **`IMPORTAR ANIMADORES`**. Se guarda un respaldo en
 `backups\animadores_<fecha>.json`. Volver a subir la misma lista no cambia nada. Los demás roles
-(secretaría, financiero, …) no se tocan.
+(secretaría, financiero, …) se conservan: si alguien de la lista ya era, por ejemplo, financiero,
+queda con los dos roles; y un animador que sale de la lista pero tiene otro rol solo pierde el rol
+animador.
 
 **Varios por correo** (p. ej. Financiero): **Vendedores → Agregar varios por correo**, pegue los
-correos y elija el rol. El nombre lo confirma cada persona en su primer ingreso.
+correos y marque uno o varios roles. El nombre lo confirma cada persona en su primer ingreso.
 
 **Primer ingreso.** La primera vez que un vendedor entra ve una pantalla de **bienvenida**: confirma
 su nombre (se propone el de su cuenta de Google cuando se creó solo con el correo) y ve su rol y
@@ -165,6 +167,10 @@ del último ingreso) o *Sin acceso*.
 
 **Quitar o devolver el acceso:** el botón de encendido (⏻) **desactiva/reactiva** sin borrar nada.
 **Eliminar** (papelera) solo funciona si no tiene participantes registrados.
+
+**Borrar tablas o participantes:** solo el **administrador** (botones **Borrar** en Participantes y en
+los cartones de un participante). Los vendedores ya no ven esos botones. Al borrar, se descuenta la
+venta al vendedor que la hizo.
 
 ### 5.1.1 Asignar o reasignar el curso de un animador (administrador)
 **Regla:** cada curso (paralelo) tiene **un solo animador**, y cada animador **un solo curso**. El curso
@@ -186,27 +192,47 @@ nombres, cédula, correo) o **eliminar** alumnos. Solo puede tocar alumnos de su
 cambiarlos de curso; eso lo hace el administrador en **Estudiantes**. Si no tiene curso asignado, la
 página se lo indica.
 
-### 5.1.3 Roles de vendedores: secretaría, financiero, parroquia y oratorio (administrador)
-En **Vendedores** (antes "Animadores") cada persona tiene un **Rol**:
+### 5.1.3 Roles de vendedores (administrador)
+En **Vendedores** cada persona tiene **uno o varios roles** (casillas): Animador, Secretaría,
+Financiero, Parroquia, Oratorio y Tecniclub.
 
 | Rol | Curso | Puede vender a |
 | --- | --- | --- |
 | Animador | Sí (un paralelo) | Alumnos, docentes y externos |
-| Secretaría, Financiero, Parroquia, Oratorio | No | **Solo externos** |
+| Secretaría, Financiero, Parroquia, Oratorio, Tecniclub | No | Externos y **alumnos** |
 
 Todos los roles tienen los mismos permisos en el panel (participantes, buscar, cartones). Además, el
-rol **Financiero** ve la sección **Reportes** (ventas por rol, por vendedor y promociones), igual que el
-administrador; los demás roles no. Se crean
-igual que un animador: **Nuevo vendedor** → nombre, correo `@uets.edu.ec`, rol. Venden de la misma
-cola de tablas que todos (5.2). En su formulario de participante el tipo queda fijo en
-**Externo**, y el servidor rechaza cualquier otro tipo. No ven **Mi curso**.
+rol **Financiero** ve la sección **Reportes**, igual que el administrador. Solo con el rol Animador se
+tiene curso y se ve **Mi curso**. Venden de la misma cola de tablas que todos (5.2).
+
+**Varios roles:** si un vendedor tiene más de un rol, el formulario de venta muestra **Vender como**
+para elegir con cuál registra esa venta (los reportes la cuentan para ese rol).
+
+**Ventas a alumnos desde un rol sin curso** (p. ej. secretaría): en **Añadir participante** elija
+*Alumno*, busque la cédula y cobre. La venta cuenta como **venta externa del rol** que vende, no del
+curso del alumno. Si el alumno **ya tiene tablas** (se las vendió su animador), el formulario lo
+avisa, muestra quién le vendió y el botón cambia a **Agregar tablas al participante**: esas tablas
+nuevas cuentan para quien las agrega (secretaría), no para el animador ni el curso. Se cobra solo la
+diferencia con la promoción recalculada.
 
 **Promociones (para todos):** el cobro se calcula por participante con todas sus tablas: paquetes de
 **5 por $10**, luego pares **2 por $5** y la suelta **1 por $3** (3 tablas = $8, 6 = $13, 7 = $15).
 Al añadir cartones a un participante se cobra solo la diferencia, con la promoción recalculada.
 
 **Reportes:** muestra tablas vendidas, dinero recaudado, promociones vendidas (cuántos paquetes de
-5, de 2 y sueltas), ventas **por rol** y **por cada vendedor**, con filtro por rol y búsqueda.
+5, de 2 y sueltas), ventas **por rol** y **por cada vendedor**, con filtro por rol y búsqueda. Cada
+venta se cuenta para quien la hizo y con el rol con que la hizo; los conteos por curso solo incluyen
+ventas de animadores.
+
+**Imprimir:** en **Participantes** (botón **Imprimir** de cada fila) o en sus cartones (**Imprimir
+tablas**) se abre el diálogo de impresión con el PDF de sus tablas.
+
+**Cartones:** el buscador de cartones muestra 50 por página (Anterior / Siguiente); la búsqueda por
+serial o por nombre del participante también va paginada. La lista de participantes muestra 25 por
+página.
+
+**Pantalla de carga:** mientras el sistema procesa (validar la cuenta, vender, cargar listas,
+guardar) aparece un aviso que cubre la pantalla; espere a que desaparezca.
 
 ### 5.2 Venta de tablas en cola (todos los vendedores)
 Ya **no** se reservan rangos de tablas por animador. Todas las tablas forman **una sola cola** en

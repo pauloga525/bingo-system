@@ -33,7 +33,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from .config import Settings
 from .db import Collections, Doc, get_db
-from .domain.roles import ADMIN_ROL, VEN_REPORTES, rol_de
+from .domain.roles import ADMIN_ROL, VEN_REPORTES, roles_de
 from .errors import ApiError, Forbidden
 from .services.animators import AnimatorService, normalize_email
 from .services.participants import is_admin
@@ -84,6 +84,8 @@ class Identity:
     # Rol del vendedor (animador, secretaria, financiero, parroquia, oratorio) o ``admin``.
     # ``rol`` es el grupo de permisos; los vendedores comparten los del animador.
     cargo: str = ""
+    # Todos los roles del vendedor (el primero es ``cargo``).
+    cargos: tuple[str, ...] = ()
     # Comprador externo: cédula de su compra.
     cedula: str = ""
 
@@ -164,15 +166,16 @@ def _staff_identity(cols: Collections, settings: Settings, email: str) -> Identi
         if not admin or not is_admin(admin):
             logger.error("No existe el usuario administrador %r en Users", settings.admin_usuario)
             raise Forbidden("Tu cuenta no tiene acceso al sistema.")
-        return Identity(ADMIN, email, user=admin, cargo=ADMIN_ROL)
+        return Identity(ADMIN, email, user=admin, cargo=ADMIN_ROL, cargos=(ADMIN_ROL,))
     svc = AnimatorService(cols, settings.staff_domain)
     animator = svc.by_email(email)
     user = svc.linked_user(animator) if animator else None
     if not user or animator is None or animator.get("activo") is False:
         return None
     if is_admin(user):
-        return Identity(ADMIN, email, user=user, cargo=ADMIN_ROL)
-    return Identity(ANIMADOR, email, user=user, cargo=rol_de(animator))
+        return Identity(ADMIN, email, user=user, cargo=ADMIN_ROL, cargos=(ADMIN_ROL,))
+    roles = tuple(roles_de(animator))
+    return Identity(ANIMADOR, email, user=user, cargo=roles[0], cargos=roles)
 
 
 def verify_google_credential(credential: Any) -> str:
@@ -292,7 +295,7 @@ def require_reports(view: F) -> F:
     @wraps(view)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         identity = current_identity()
-        if not identity.is_admin and identity.cargo not in VEN_REPORTES:
+        if not identity.is_admin and not VEN_REPORTES.intersection(identity.cargos or (identity.cargo,)):
             raise Forbidden("Los reportes son solo para el administrador y el rol Financiero.")
         return view(*args, **kwargs)
 

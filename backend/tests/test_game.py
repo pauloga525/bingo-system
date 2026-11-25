@@ -18,7 +18,7 @@ from bingo.services.game import GameService
 from bingo.services.pdf_extract import extraer_matrices_pdf
 from bingo.services.pdf_render import render_cards_pdf
 
-from .conftest import Seed, board_login, register
+from .conftest import Seed, board_login, login_as, register
 
 
 @pytest.fixture(autouse=True)
@@ -105,9 +105,10 @@ def test_generate_refuses_to_overwrite_existing_tables(client: FlaskClient, cols
     register(client, seed.ana, "0101", ["CARD00001"])
     assert client.post("/generate", json={"num_cards": 3}).status_code == 409
     assert client.post("/generate", json={"num_cards": 3, "force": True}).status_code == 409  # hay asignadas
+    login_as(client, "admin")
     client.delete(
         f"/api/participante/{cols.participants.find_one({})['_id']}/1",  # type: ignore[index]
-        json={"usuario_id": str(seed.ana)},
+        json={"usuario_id": str(seed.admin)},
     )
     assert client.post("/generate", json={"num_cards": 3}).status_code == 409
     assert client.post("/generate", json={"num_cards": 3, "force": True}).status_code == 200

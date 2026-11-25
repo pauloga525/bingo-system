@@ -11,6 +11,7 @@ from ..db import Collections
 from ..domain.pricing import calcular_total
 from ..errors import NotFound
 from ..utils import require_object_id, safe_int
+from .participants import sales_of
 
 
 class UserService:
@@ -28,9 +29,22 @@ class UserService:
         if not usuario:
             raise NotFound("Usuario no encontrado")
 
-        participantes = list(self.cols.participants.find({"registrado_por": oid}, {"tablas": 1, "total_pagar": 1}))
-        reales = sum(len(p.get("tablas") or []) for p in participantes)
-        vendido_real = sum(calcular_total(len(p.get("tablas") or [])) for p in participantes)
+        participantes = list(
+            self.cols.participants.find(
+                {"$or": [{"registrado_por": oid}, {"ventas.vendedor": oid}]},
+                {"tablas": 1, "total_pagar": 1, "ventas": 1, "registrado_por": 1},
+            )
+        )
+        reales, vendido_real = 0, 0
+        for p in participantes:
+            ventas = sales_of(p)
+            if all(v.get("vendedor") == oid for v in ventas):  # todo lo vendió este usuario
+                reales += len(p.get("tablas") or [])
+                vendido_real += calcular_total(len(p.get("tablas") or []))
+                continue
+            propias = [v for v in ventas if v.get("vendedor") == oid]
+            reales += sum(len(v.get("tablas") or []) for v in propias)
+            vendido_real += sum(safe_int(v.get("monto"), 0) for v in propias)
         used_bd = safe_int(usuario.get("usedTables"), 0)
         diferencia = used_bd - reales
         vendido_bd = usuario.get("total_vendido", 0)

@@ -51,7 +51,7 @@ class TableService:
                 owners.setdefault(tid, p)
         return owners
 
-    def list_tables(self, disponible: str | None, serial: str | None, search: str) -> list[dict[str, Any]]:
+    def _query(self, disponible: str | None, serial: str | None, search: str) -> dict[str, Any]:
         query: dict[str, Any] = {}
         if disponible == "true":
             query["stateAsigned"] = {"$ne": True}
@@ -59,19 +59,30 @@ class TableService:
             query["stateAsigned"] = True
         if serial:
             query["serial"] = {"$regex": re.escape(serial), "$options": "i"}
-
-        tablas = list(self.cols.tables.find(query).sort("serial", 1))
-
         if search:
             pattern = {"$regex": re.escape(search), "$options": "i"}
-            matching_ids = {
-                tid
-                for p in self.cols.participants.find({"$or": [{"nombre": pattern}, {"cedula": pattern}]}, {"tablas": 1})
-                for tid in p.get("tablas") or []
-            }
-            needle = search.lower()
-            tablas = [t for t in tablas if needle in t.get("serial", "").lower() or t["_id"] in matching_ids]
+            personas = {"$or": [{"nombre": pattern}, {"apellido": pattern}, {"cedula": pattern}]}
+            matching_ids = [
+                tid for p in self.cols.participants.find(personas, {"tablas": 1}) for tid in p.get("tablas") or []
+            ]
+            query["$or"] = [{"serial": pattern}, {"_id": {"$in": matching_ids}}]
+        return query
 
+    def page(self, disponible: str | None, serial: str | None, search: str, page: int, per_page: int) -> dict[str, Any]:
+        """Una página de tablas (ordenadas por serial) con el total, para no enviar las 25 000."""
+        per_page = min(max(per_page, 1), 200)
+        query = self._query(disponible, serial, search)
+        total = self.cols.tables.count_documents(query)
+        pages = max((total + per_page - 1) // per_page, 1)
+        page = min(max(page, 1), pages)
+        tablas = list(self.cols.tables.find(query).sort("serial", 1).skip((page - 1) * per_page).limit(per_page))
+        return {"tablas": self._with_owners(tablas), "total": total, "page": page, "pages": pages, "per_page": per_page}
+
+    def list_tables(self, disponible: str | None, serial: str | None, search: str) -> list[dict[str, Any]]:
+        tablas = list(self.cols.tables.find(self._query(disponible, serial, search)).sort("serial", 1))
+        return self._with_owners(tablas)
+
+    def _with_owners(self, tablas: list[Doc]) -> list[dict[str, Any]]:
         owners = self._owners_by_table([t["_id"] for t in tablas if t.get("stateAsigned")])
         result = []
         for t in tablas:

@@ -191,12 +191,13 @@ def test_rejected_attempts_list_dismiss_and_enable(admin: FlaskClient, cols: Col
     assert cols.access_log.count_documents({}) == 0
 
 
-def test_import_ignores_other_roles_and_reports_conflicts(
+def test_import_adds_animador_role_to_other_roles_and_reports_conflicts(
     admin: FlaskClient, cols: Collections, tmp_path: Path
 ) -> None:
+    # Un vendedor de otro rol que está en la lista del DECE suma el rol animador (conserva el suyo).
     admin.post("/api/animadores", json={"nombre": "SECRE", "correo": "nueva@uets.edu.ec", "rol": "secretaria"})
     vista = _subir(admin, "/api/animadores/importar/vista-previa", _xlsx(LISTA[:2]), "l.xlsx").json
-    assert any("otro rol" in e for e in vista["errores"]) and vista["validas"] == 1
+    assert vista["errores"] == [] and vista["validas"] == 2
     sin_validas = _xlsx([LISTA[2]])
     resp = _subir(admin, "/api/animadores/importar", sin_validas, "l.xlsx", confirmacion="IMPORTAR ANIMADORES")
     assert resp.status_code == 400 and "filas válidas" in resp.json["message"]

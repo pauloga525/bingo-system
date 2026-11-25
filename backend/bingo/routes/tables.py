@@ -16,9 +16,14 @@ bp = Blueprint("tables", __name__, url_prefix="/api")
 
 @bp.get("/tablas")
 def obtener_tablas() -> Response:
-    tablas = TableService(get_db()).list_tables(
-        request.args.get("disponible"), request.args.get("serial"), request.args.get("search", "").strip()
-    )
+    """Tablas filtradas. Con ``?page=`` (y ``per_page``, máx. 200) devuelve una sola página."""
+    args = request.args
+    svc = TableService(get_db())
+    filtros = (args.get("disponible"), args.get("serial"), args.get("search", "").strip())
+    if args.get("page"):
+        pagina = svc.page(*filtros, safe_int(args.get("page"), 1), safe_int(args.get("per_page"), 50))
+        return jsonify({"success": True, **pagina, "count": len(pagina["tablas"])})
+    tablas = svc.list_tables(*filtros)
     return jsonify({"success": True, "tablas": tablas, "count": len(tablas)})
 
 

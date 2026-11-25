@@ -10,6 +10,7 @@ import {
   LucideAngularModule,
   Mail,
   Plus,
+  Printer,
   Search,
   Trash2,
   X,
@@ -17,8 +18,11 @@ import {
 import { firstValueFrom } from 'rxjs';
 
 import { errorMessage } from '../core/http';
+import { imprimirTablas } from '../core/imprimir';
+import { conMensaje } from '../core/loading';
 import { SessionService } from '../core/session';
 import { Tabla } from '../core/tablas';
+import { VentaParticipante } from './add-user';
 import { Participante } from './user-list';
 
 @Component({
@@ -72,13 +76,35 @@ import { Participante } from './user-list';
                 </button>
               </p>
             </div>
-            <a
-              [routerLink]="['/admin/user', userId(), 'add-carton']"
-              class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-bold"
-            >
-              <lucide-icon [img]="PlusIcon" [size]="16" /> Añadir Cartón
-            </a>
+            <div class="flex flex-wrap gap-2">
+              <button
+                type="button"
+                (click)="imprimir()"
+                [disabled]="!cartones().length"
+                class="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 dark:text-white px-4 py-2 rounded-lg font-bold disabled:opacity-50"
+              >
+                <lucide-icon [img]="PrinterIcon" [size]="16" /> Imprimir tablas
+              </button>
+              <a
+                [routerLink]="['/admin/user', userId(), 'add-carton']"
+                class="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-bold"
+              >
+                <lucide-icon [img]="PlusIcon" [size]="16" /> Añadir Cartón
+              </a>
+            </div>
           </div>
+          @if (participante()?.ventas?.length) {
+            <div class="mt-4 text-sm text-gray-600 dark:text-gray-300">
+              <p class="font-semibold">Ventas</p>
+              @for (v of participante()?.ventas || []; track $index) {
+                <p>
+                  · {{ v.cantidad }} tabla(s) — {{ v.vendedor_nombre }} ({{ v.rol_nombre }}) — \${{
+                    v.monto
+                  }}
+                </p>
+              }
+            </div>
+          }
         </div>
 
         <div class="mb-6 relative">
@@ -134,13 +160,16 @@ import { Participante } from './user-list';
                       >
                         <lucide-icon [img]="EyeIcon" [size]="16" /> Ver
                       </a>
-                      <button
-                        type="button"
-                        (click)="eliminar(carton)"
-                        class="flex items-center gap-1 text-red-600 hover:underline"
-                      >
-                        <lucide-icon [img]="TrashIcon" [size]="16" /> Borrar
-                      </button>
+                      <!-- Solo el administrador quita tablas a un participante. -->
+                      @if (isAdmin()) {
+                        <button
+                          type="button"
+                          (click)="eliminar(carton)"
+                          class="flex items-center gap-1 text-red-600 hover:underline"
+                        >
+                          <lucide-icon [img]="TrashIcon" [size]="16" /> Borrar
+                        </button>
+                      }
                     </div>
                   </td>
                 </tr>
@@ -170,6 +199,8 @@ export class UserCartons implements OnInit {
   protected readonly TrashIcon = Trash2;
   protected readonly XIcon = X;
   protected readonly MailIcon = Mail;
+  protected readonly PrinterIcon = Printer;
+  protected readonly isAdmin = this.session.isAdmin;
   protected readonly enviando = signal(false);
   protected readonly estadoCorreo = computed(() => {
     const p = this.participante();
@@ -185,7 +216,9 @@ export class UserCartons implements OnInit {
   /** Parámetro de ruta :userId (id del participante). */
   readonly userId = input.required<string>();
 
-  protected readonly participante = signal<Participante | null>(null);
+  protected readonly participante = signal<
+    (Participante & { ventas?: VentaParticipante[] }) | null
+  >(null);
   protected readonly cartones = signal<Tabla[]>([]);
   protected readonly loading = signal(true);
   protected readonly search = signal('');
@@ -199,25 +232,23 @@ export class UserCartons implements OnInit {
   }
 
   private async cargar(): Promise<void> {
-    const user = this.session.user();
     try {
-      const resp = await firstValueFrom(
-        this.http.get<{ success: boolean; tablas?: Tabla[] }>(
-          `/api/obtenerTablasParticipante/${this.userId()}`,
+      const [resp, ficha] = await Promise.all([
+        firstValueFrom(
+          this.http.get<{ success: boolean; tablas?: Tabla[] }>(
+            `/api/obtenerTablasParticipante/${this.userId()}`,
+          ),
         ),
-      );
+        firstValueFrom(
+          this.http.get<{
+            success: boolean;
+            participante?: Participante & { ventas?: VentaParticipante[] };
+          }>(`/api/participante/${this.userId()}`),
+        ),
+      ]);
       if (!resp.success) return;
       this.cartones.set(resp.tablas || []);
-      const lista = await firstValueFrom(
-        this.http.get<{ success: boolean; participantes?: Participante[] }>('/api/participantes', {
-          params: { usuario_id: user?.id || '', tipo_usuario: String(user?.tipo_usuario ?? '') },
-        }),
-      );
-      if (lista.success) {
-        this.participante.set(
-          (lista.participantes || []).find((p) => p._id === this.userId()) || null,
-        );
-      }
+      this.participante.set(ficha.participante || null);
     } catch (err) {
       alert(errorMessage(err, 'Error al cargar los cartones del participante'));
     } finally {
@@ -234,6 +265,7 @@ export class UserCartons implements OnInit {
         this.http.post<{ message?: string }>(
           `/api/participante/${this.userId()}/correo`,
           correo ? { correo } : {},
+          { context: conMensaje('Enviando las tablas por correo...') },
         ),
       );
       alert(resp.message || 'Correo en camino.');
@@ -242,6 +274,14 @@ export class UserCartons implements OnInit {
       alert(errorMessage(err, 'No se pudo enviar el correo.'));
     } finally {
       this.enviando.set(false);
+    }
+  }
+
+  protected async imprimir(): Promise<void> {
+    try {
+      await imprimirTablas(this.http, this.participante()?.cedula || '');
+    } catch (err) {
+      alert(errorMessage(err, 'No se pudieron preparar las tablas para imprimir.'));
     }
   }
 
@@ -259,7 +299,7 @@ export class UserCartons implements OnInit {
       const resp = await firstValueFrom(
         this.http.delete<{ success: boolean; message?: string }>(
           `/api/participante/${this.userId()}/tabla/${carton._id}/${user?.tipo_usuario}`,
-          { body: { usuario_id: user?.id } },
+          { body: { usuario_id: user?.id }, context: conMensaje('Quitando la tabla...') },
         ),
       );
       if (resp.success) {

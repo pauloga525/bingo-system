@@ -15,9 +15,10 @@ from flask import Blueprint, Response, current_app, jsonify, request, send_file
 from ..auth import current_identity
 from ..config import Settings
 from ..db import Doc, get_db
+from ..domain.roles import ETIQUETAS
 from ..errors import ApiError, Forbidden
 from ..services.notifications import TablesMailer
-from ..services.participants import ParticipantService, is_admin, table_summary
+from ..services.participants import ParticipantService, is_admin, sales_of, table_summary
 from ..services.pdf_render import render_cards_pdf
 from ..utils import json_body, require_object_id, safe_int, serialize_mongo_doc, try_object_id
 
@@ -84,6 +85,44 @@ def obtener_tablas_participante(participante_id: str) -> Response:
     return jsonify({"success": True, "message": "Tablas recuperadas correctamente.", "tablas": tablas})
 
 
+def _sellers_of(p: Doc) -> list[dict[str, Any]]:
+    """Ventas del participante con el nombre de cada vendedor (para mostrar quién vendió qué)."""
+    ventas = sales_of(p)
+    ids = [v.get("vendedor") for v in ventas if v.get("vendedor")]
+    nombres = {
+        u["_id"]: u.get("nombres_completos") or u.get("usuario") or "Desconocido"
+        for u in get_db().users.find({"_id": {"$in": ids}}, {"nombres_completos": 1, "usuario": 1})
+    }
+    return [
+        {
+            "vendedor": str(v.get("vendedor") or ""),
+            "vendedor_nombre": nombres.get(v.get("vendedor"), "Desconocido"),
+            "rol": v.get("rol"),
+            "rol_nombre": ETIQUETAS.get(str(v.get("rol")), str(v.get("rol"))),
+            "cantidad": len(v.get("tablas") or []),
+            "monto": v.get("monto", 0),
+            "fecha": v.get("fecha", ""),
+        }
+        for v in ventas
+    ]
+
+
+def _attend(p: Doc) -> bool:
+    """El usuario conectado puede ver y venderle tablas a ``p``."""
+    user = current_identity().user
+    return bool(user) and ParticipantService.can_attend(user or {}, p)
+
+
+@bp.get("/participante/<participante_id>")
+def ver_participante(participante_id: str) -> Response:
+    """Ficha del participante con sus ventas (admin, sus vendedores o un rol sin curso si es alumno)."""
+    p = _svc().get_participant(require_object_id(participante_id, "ID de participante inválido."))
+    if not _attend(p):
+        raise Forbidden("No tiene permiso para ver este participante.")
+    info = serialize_mongo_doc({k: v for k, v in p.items() if k != "ventas"})
+    return jsonify({"success": True, "participante": {**info, "ventas": _sellers_of(p)}})
+
+
 @bp.get("/participante/cedula/<string:cedula>")
 def participante_por_cedula(cedula: str) -> Response:
     svc = _svc()
@@ -93,8 +132,13 @@ def participante_por_cedula(cedula: str) -> Response:
         "nombre": p.get("nombre", ""),
         "apellido": p.get("apellido", ""),
         "cedula": p.get("cedula", ""),
+        "tipo": p.get("tipo", ""),
+        "correo": p.get("correo", "") if _attend(p) else "",
         "nivelCurso": p.get("nivelCurso", ""),
         "paralelo": p.get("paralelo", ""),
+        # Si el usuario conectado puede agregarle tablas (los roles sin curso, a cualquier alumno).
+        "puede_agregar": _attend(p),
+        "ventas": _sellers_of(p),
         "tablas": [table_summary(t) for t in svc.tables_of(p)],
     }
     return jsonify({"success": True, "participante": info})
@@ -137,7 +181,12 @@ def agregar_tablas_participante(participante_id: str, tipo_usuario: str) -> Resp
     if not isinstance(refs, list):
         raise ApiError("El campo 'tablas' debe ser una lista.")
     seriales = _svc().add_tables(
-        pid, refs, data.get("usuario_id"), data.get("cantidad"), allow_serials=current_identity().is_admin
+        pid,
+        refs,
+        data.get("usuario_id"),
+        data.get("cantidad"),
+        allow_serials=current_identity().is_admin,
+        rol_venta=data.get("rol_venta"),
     )
     _mail().notify(pid)
     return jsonify({"success": True, "message": "Tablas agregadas correctamente.", "seriales": seriales})
@@ -179,6 +228,11 @@ def _serialize_all(docs: Iterable[Doc]) -> list[dict[str, Any]]:
     return [serialize_mongo_doc(p) for p in docs]
 
 
+def _sold_by_query(oid: Any) -> dict[str, Any]:
+    """Participantes que registró el usuario o a los que les vendió tablas."""
+    return {"$or": [{"registrado_por": oid}, {"ventas.vendedor": oid}]}
+
+
 @bp.get("/participantes/por-usuario/<usuario_id>")
 def participantes_por_usuario(usuario_id: str) -> Response:
     """Participantes del usuario (o todos si el usuario es administrador)."""
@@ -188,7 +242,7 @@ def participantes_por_usuario(usuario_id: str) -> Response:
     if not usuario:
         raise ApiError("Usuario no encontrado.", 404)
     admin = is_admin(usuario)
-    participantes = _serialize_all(cols.participants.find({} if admin else {"registrado_por": oid}))
+    participantes = _serialize_all(cols.participants.find({} if admin else _sold_by_query(oid)))
     return jsonify(
         {
             "success": True,
@@ -229,6 +283,6 @@ def obtener_participantes() -> Response:
     usuario_id = request.args.get("usuario_id") or identity.user_id
     query: dict[str, Any] = {}
     if not identity.is_admin or (request.args.get("tipo_usuario") != "0" and request.args.get("usuario_id")):
-        query = {"registrado_por": require_object_id(usuario_id, "ID de usuario inválido.")}
+        query = _sold_by_query(require_object_id(usuario_id, "ID de usuario inválido."))
     participantes = _serialize_all(get_db().participants.find(query))
     return jsonify({"success": True, "participantes": participantes, "count": len(participantes)})

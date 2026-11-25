@@ -1,10 +1,20 @@
 // Interceptor HTTP: URL base del API, token de sesión y cierre de sesión ante 401.
 import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
-import { catchError, throwError } from 'rxjs';
+import { catchError, finalize, throwError } from 'rxjs';
 
 import { API_BASE_URL } from './config';
+import { LoadingService, MENSAJE_CARGA, SIN_CARGA } from './loading';
 import { SessionService } from './session';
+
+/** Muestra el overlay de carga mientras dura cada petición (salvo las marcadas con SIN_CARGA). */
+export const loadingInterceptor: HttpInterceptorFn = (req, next) => {
+  if (req.context.get(SIN_CARGA)) return next(req);
+  const loading = inject(LoadingService);
+  const mensaje = req.context.get(MENSAJE_CARGA);
+  loading.empezar(mensaje);
+  return next(req).pipe(finalize(() => loading.terminar(mensaje)));
+};
 
 export const apiInterceptor: HttpInterceptorFn = (req, next) => {
   const session = inject(SessionService);

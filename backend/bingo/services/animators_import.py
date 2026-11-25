@@ -2,7 +2,7 @@
 
 Cada fila trae: docente, correo, nivel (EGB/Bachillerato), curso (1.º..10.º),
 especialidad/subnivel y paralelo. La lista **reemplaza** la asignación actual de
-animadores (solo el rol ``animador``; secretaría, financiero, etc. no se tocan):
+animadores (solo el rol ``animador``; los demás roles de cada vendedor se conservan):
 
 - quien está en la lista queda con ese correo (puede iniciar sesión) y ese curso;
 - se reconoce a los animadores existentes por correo o, si no, por nombre, para
@@ -30,7 +30,7 @@ import pdfplumber
 from bson import json_util
 
 from ..db import Collections, Doc
-from ..domain.roles import ANIMADOR_ROL, rol_de
+from ..domain.roles import ANIMADOR_ROL, roles_de
 from ..errors import ApiError
 from .animators import COURSE_FIELDS, AnimatorService, animator_name, course_key, course_of, normalize_email
 
@@ -237,18 +237,15 @@ class AnimatorImport:
         validas = self._validate(filas, errores, cursos)
 
         todos = list(self.cols.animators.find())
-        animadores = [a for a in todos if rol_de(a) == ANIMADOR_ROL]
-        por_correo = {normalize_email(a.get("correo")): a for a in animadores if a.get("correo")}
+        animadores = [a for a in todos if ANIMADOR_ROL in roles_de(a)]
+        # Por correo se busca entre todos: un vendedor de otro rol que está en la lista suma el rol animador.
+        por_correo = {normalize_email(a.get("correo")): a for a in todos if a.get("correo")}
         por_nombre = {norm(animator_name(a)): a for a in animadores}
-        otros_roles = {normalize_email(a.get("correo")) for a in todos if rol_de(a) != ANIMADOR_ROL}
 
         acciones: list[tuple[Fila, Doc | None]] = []
         cuenta = {"nuevos": 0, "actualizados": 0, "sin_cambios": 0}
         usados: set[Any] = set()
         for f in validas:
-            if f.correo in otros_roles:
-                errores.append(f"Fila {f.numero}: {f.correo} ya es vendedor con otro rol")
-                continue
             doc = por_correo.get(f.correo) or por_nombre.get(norm(f.nombre))
             if doc is not None and doc["_id"] in usados:
                 doc = None
@@ -290,6 +287,21 @@ class AnimatorImport:
         )
         return nombre
 
+    def _release(self, quitar: list[Doc]) -> None:
+        """1) Libera los cursos (índice único) y quita el rol animador a quien no está en la lista.
+
+        Si tiene otros roles conserva el acceso por ellos; si no, se le quita el correo.
+        """
+        for doc in self.cols.animators.find():
+            if ANIMADOR_ROL in roles_de(doc) and course_of(doc):
+                self.svc.set_course(doc, None)
+        for doc in quitar:
+            otros = [r for r in roles_de(doc) if r != ANIMADOR_ROL]
+            if otros:
+                self.svc.update(doc["_id"], {"roles": otros})
+            else:
+                self.cols.animators.update_one({"_id": doc["_id"]}, {"$unset": {"correo": ""}})
+
     def apply(self, data: bytes, confirmation: Any, filename: str = "") -> dict[str, Any]:
         if str(confirmation or "").strip() != CONFIRMATION:
             raise ApiError(f"Escriba exactamente {CONFIRMATION} para confirmar.")
@@ -299,20 +311,19 @@ class AnimatorImport:
             raise ApiError("El archivo no tiene filas válidas para importar.")
         respaldo = self._backup()
         sin_curso = dict.fromkeys(COURSE_FIELDS)
-        # 1) Se liberan los cursos (índice único) y se quita el acceso a quien no está en la lista.
-        for doc in self.cols.animators.find():
-            if rol_de(doc) == ANIMADOR_ROL and course_of(doc):
-                self.svc.set_course(doc, None)
-        for doc in plan["quitar"]:
-            self.cols.animators.update_one({"_id": doc["_id"]}, {"$unset": {"correo": ""}})
+        self._release(plan["quitar"])
         # 2) Se crea o actualiza cada animador de la lista con su correo y curso.
         for fila, doc in plan["acciones"]:
             if doc is None:
                 self.svc.create({"nombre": fila.nombre, "correo": fila.correo, "rol": ANIMADOR_ROL, **fila.course()})
             else:
+                roles = roles_de(doc)
+                if ANIMADOR_ROL not in roles:
+                    roles = [ANIMADOR_ROL, *roles]
                 self.cols.animators.update_one({"_id": doc["_id"]}, {"$unset": {"correo": ""}})
                 self.svc.update(
-                    doc["_id"], {"nombre": fila.nombre, "correo": fila.correo, **sin_curso, **fila.course()}
+                    doc["_id"],
+                    {"nombre": fila.nombre, "correo": fila.correo, "roles": roles, **sin_curso, **fila.course()},
                 )
         resumen: dict[str, Any] = plan["resumen"]
         return {**resumen, "respaldo": respaldo}

@@ -21,7 +21,7 @@ from ..auth import (
 )
 from ..config import Settings
 from ..db import get_db
-from ..domain.roles import ETIQUETAS, solo_externos
+from ..domain.roles import ANIMADOR_ROL, ETIQUETAS, VEN_REPORTES, etiquetas, tipos_venta
 from ..errors import Forbidden
 from ..services.animators import AnimatorService
 from ..services.external_access import GENERIC, ExternalAccess
@@ -58,6 +58,7 @@ def _profile(identity: Identity) -> dict[str, Any]:
             "paralelo": s.get("Paralelo"),
         }
     user = identity.user or {}
+    cargos = identity.cargos or (identity.cargo,)
     vendedor = _animators().by_email(identity.email) if identity.rol == "animador" else None
     return {
         **base,
@@ -65,10 +66,15 @@ def _profile(identity: Identity) -> dict[str, Any]:
         "onboarding_pendiente": bool(vendedor and not vendedor.get("onboarding_at")),
         # Nombre de su cuenta de Google, para proponerlo cuando se creó solo con el correo.
         "nombre_google": (vendedor or {}).get("nombre_google", "") if (vendedor or {}).get("nombre_pendiente") else "",
-        # Rol del vendedor (animador, secretaria, financiero, parroquia, oratorio o admin).
+        # Roles del vendedor (animador, secretaria, financiero, ...; o admin). ``cargo`` = principal.
         "cargo": identity.cargo,
-        "cargo_nombre": ETIQUETAS.get(identity.cargo, identity.cargo),
-        "solo_externos": solo_externos(identity.cargo),
+        "cargos": list(cargos),
+        "cargo_nombre": etiquetas(list(cargos)),
+        "cargos_nombres": {c: ETIQUETAS.get(c, c) for c in cargos},
+        # Sin rol animador: no tiene curso (vende a externos y a alumnos como venta del rol).
+        "solo_externos": not identity.is_admin and ANIMADOR_ROL not in cargos,
+        "tipos_venta": tipos_venta(list(cargos)),
+        "ve_reportes": identity.is_admin or bool(VEN_REPORTES.intersection(cargos)),
         "id": identity.user_id,
         "usuario": user.get("usuario"),
         "nombres": user.get("nombres_completos"),

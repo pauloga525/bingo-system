@@ -56,6 +56,7 @@ interface VentaVendedor extends Ventas {
   nombre: string;
   usuario?: string;
   rol: string;
+  roles?: string[];
   rol_nombre: string;
 }
 
@@ -335,7 +336,7 @@ export class Reports implements OnInit {
     const rol = this.rolFiltro();
     return (this.reportes()?.ventas_por_vendedor || []).filter(
       (v) =>
-        (!rol || v.rol === rol) &&
+        (!rol || (v.roles || [v.rol]).includes(rol)) &&
         (!this.soloConVentas() || v.tablas > 0) &&
         (!q || `${v.nombre} ${v.usuario || ''}`.toLowerCase().includes(q)),
     );

@@ -1,4 +1,11 @@
-"""Reporte general de ventas y participación."""
+"""Reporte general de ventas y participación.
+
+Las ventas se cuentan por cada venta registrada en el participante
+(``Participantes.ventas``): al vendedor que la hizo y con el rol con que la
+hizo. Así, si secretaría agrega tablas a un alumno, esas tablas cuentan para
+secretaría y no para el curso del alumno. Los conteos por curso, nivel y
+paralelo solo incluyen participantes con alguna venta del rol animador.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +14,9 @@ from typing import Any
 
 from ..db import Collections
 from ..domain.pricing import PROMOCIONES, calcular_total, desglose
-from ..domain.roles import ADMIN_ROL, ETIQUETAS, ROLES, rol_de
-from ..utils import try_object_id
+from ..domain.roles import ADMIN_ROL, ANIMADOR_ROL, ETIQUETAS, ROLES, etiquetas, rol_de, roles_de
+from ..utils import safe_int, try_object_id
+from .participants import sales_of
 
 _USER_FIELDS = {
     "nombres_completos": 1,
@@ -19,6 +27,7 @@ _USER_FIELDS = {
     "paralelo": 1,
     "tipo_usuario": 1,
     "rol": 1,
+    "roles": 1,
 }
 _PROMOS = tuple(PROMOCIONES)
 
@@ -27,12 +36,46 @@ def _ventas_vacias() -> dict[str, Any]:
     return {"participantes": 0, "tablas": 0, "monto": 0, "promociones": dict.fromkeys(_PROMOS, 0)}
 
 
-def _sumar(destino: dict[str, Any], tablas: int, monto: int, promos: dict[str, int]) -> None:
-    destino["participantes"] += 1
+def _sumar(destino: dict[str, Any], tablas: int, monto: int, promos: dict[str, int], nuevo: bool = True) -> None:
+    destino["participantes"] += 1 if nuevo else 0
     destino["tablas"] += tablas
     destino["monto"] += monto
     for k, n in promos.items():
         destino["promociones"][k] += n
+
+
+def _contar_ventas(
+    p: dict[str, Any],
+    usuarios: dict[str, dict[str, Any]],
+    por_vendedor: dict[str, dict[str, Any]],
+    por_rol: dict[str, dict[str, Any]],
+    ventas_por_usuario: Counter[str],
+) -> dict[str, Any] | None:
+    """Suma cada venta del participante a su vendedor y al rol con que se hizo.
+
+    Las ventas antiguas toman el rol actual del vendedor. Devuelve el usuario
+    animador que le vendió (para los conteos por curso) o ``None`` si ninguno.
+    """
+    registrador = usuarios.get(str(try_object_id(p.get("registrado_por"))), {})
+    vistos_vendedor: set[str] = set()
+    vistos_rol: set[str] = set()
+    u_curso: dict[str, Any] | None = None
+    for venta in sales_of(p, str(registrador.get("rol") or ANIMADOR_ROL)):
+        n = len(venta.get("tablas") or [])
+        monto = safe_int(venta.get("monto"), calcular_total(n))
+        promos = desglose(n)
+        uid = str(venta.get("vendedor") or "")
+        u = usuarios.get(uid, {})
+        rol = str(venta.get("rol") or u.get("rol") or ANIMADOR_ROL)
+        if uid in por_vendedor:
+            _sumar(por_vendedor[uid], n, monto, promos, uid not in vistos_vendedor)
+            vistos_vendedor.add(uid)
+        _sumar(por_rol.setdefault(rol, _ventas_vacias()), n, monto, promos, rol not in vistos_rol)
+        vistos_rol.add(rol)
+        ventas_por_usuario[str(u.get("nombre", "Desconocido"))] += monto
+        if rol == ANIMADOR_ROL and u_curso is None:
+            u_curso = u
+    return u_curso
 
 
 def _top(counter: Counter[str]) -> str | None:
@@ -64,10 +107,13 @@ class ReportService:
                     "paralelo": 1,
                     "especialidad": 1,
                     "rol_vendedor": 1,
+                    "ventas": 1,
+                    "total_pagar": 1,
                 },
             )
         )
         user_ids = {oid for p in participantes if (oid := try_object_id(p.get("registrado_por")))}
+        user_ids |= {v.get("vendedor") for p in participantes for v in p.get("ventas") or [] if v.get("vendedor")}
         usuarios: dict[str, dict[str, Any]] = {}
         # Todos los vendedores (aunque no hayan vendido) más quienes registraron participantes.
         for u in self.cols.users.find(
@@ -76,6 +122,7 @@ class ReportService:
             usuarios[str(u["_id"])] = {
                 "nombre": u.get("nombres_completos") or u.get("usuario") or "Desconocido",
                 "rol": rol_de(u),
+                "roles": roles_de(u),
                 **{k: u.get(k) for k in ("usuario", "curso", "especialidad", "nivel", "paralelo")},
             }
         por_vendedor: dict[str, dict[str, Any]] = {uid: _ventas_vacias() for uid in usuarios}
@@ -93,23 +140,19 @@ class ReportService:
 
         for p in participantes:
             num_tablas = len(p.get("tablas") or [])
-            # Misma regla de cobro que al registrar (antes el reporte usaba otra).
-            monto = calcular_total(num_tablas)
-            promos = desglose(num_tablas)
+            # Totales del participante: misma regla de cobro que al registrar.
             tablas_vendidas += num_tablas
-            dinero += monto
-            for k, n in promos.items():
+            dinero += calcular_total(num_tablas)
+            for k, n in desglose(num_tablas).items():
                 promociones_total[k] += n
+            ventas_por_grupo[str(p.get("grupoAdetitss") or p.get("grupoAdetiss") or "Sin grupo")] += calcular_total(
+                num_tablas
+            )
 
-            uid = try_object_id(p.get("registrado_por"))
-            u = usuarios.get(str(uid), {}) if uid else {}
-            if uid and str(uid) in por_vendedor:
-                _sumar(por_vendedor[str(uid)], num_tablas, monto, promos)
-            # Rol al momento de la venta; las ventas antiguas toman el rol actual del vendedor.
-            rol = str(p.get("rol_vendedor") or u.get("rol") or "animador")
-            _sumar(por_rol.setdefault(rol, _ventas_vacias()), num_tablas, monto, promos)
-            ventas_por_usuario[str(u.get("nombre", "Desconocido"))] += monto
-            ventas_por_grupo[str(p.get("grupoAdetitss") or p.get("grupoAdetiss") or "Sin grupo")] += monto
+            u_curso = _contar_ventas(p, usuarios, por_vendedor, por_rol, ventas_por_usuario)
+            if u_curso is None:
+                continue  # venta externa de un rol sin curso: no cuenta para cursos
+            u = u_curso
 
             # Las claves se pasan a str: hay datos con nivelCurso numérico y de texto
             # mezclados, y eso hacía fallar el reporte (500) al serializar.
@@ -135,7 +178,8 @@ class ReportService:
                 "nombre": usuarios[uid]["nombre"],
                 "usuario": usuarios[uid].get("usuario"),
                 "rol": usuarios[uid]["rol"],
-                "rol_nombre": ETIQUETAS.get(usuarios[uid]["rol"], usuarios[uid]["rol"]),
+                "roles": usuarios[uid]["roles"],
+                "rol_nombre": etiquetas(usuarios[uid]["roles"]),
                 **ventas,
             }
             for uid, ventas in por_vendedor.items()
@@ -145,7 +189,7 @@ class ReportService:
             {
                 "rol": rol,
                 "nombre": ETIQUETAS.get(rol, rol),
-                "vendedores": sum(1 for u in usuarios.values() if u["rol"] == rol),
+                "vendedores": sum(1 for u in usuarios.values() if rol in u["roles"]),
                 **ventas,
             }
             for rol, ventas in por_rol.items()
