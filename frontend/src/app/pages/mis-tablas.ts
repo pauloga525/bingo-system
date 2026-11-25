@@ -1,4 +1,4 @@
-// Vista del estudiante: sus tablas, enlazadas por su cédula.
+// Vista del estudiante o del comprador externo: sus tablas, enlazadas por su cédula.
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
@@ -11,7 +11,7 @@ import { Tabla } from '../core/tablas';
 import { TablasGrid } from '../shared/tablas-grid';
 
 interface MisTablasResponse {
-  estudiante?: { nombre?: string; cedula?: string };
+  titular?: { nombre?: string; cedula?: string };
   tablas: Tabla[];
 }
 
@@ -48,12 +48,12 @@ interface MisTablasResponse {
         @if (data(); as d) {
           <div class="bg-white dark:bg-gray-800 rounded-2xl shadow p-6">
             <p class="text-gray-700 dark:text-gray-200 mb-4">
-              {{ d.estudiante?.nombre }} · Cédula {{ d.estudiante?.cedula }}
+              {{ d.titular?.nombre }} · Cédula {{ d.titular?.cedula }}
             </p>
             <app-tablas-grid
               [tablas]="d.tablas"
-              [titulo]="'Bingo UETS - ' + (d.estudiante?.nombre || '')"
-              [archivo]="'tablas_' + (d.estudiante?.cedula || 'estudiante') + '.pdf'"
+              [titulo]="'Bingo UETS - ' + (d.titular?.nombre || '')"
+              [archivo]="'tablas_' + (d.titular?.cedula || 'bingo') + '.pdf'"
             />
           </div>
         }

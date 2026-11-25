@@ -38,7 +38,14 @@ def test_register_rejects_duplicate_cedula(client: FlaskClient, seed: Seed) -> N
 def test_animator_cannot_choose_specific_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     resp = client.post(
         "/api/registrarParticipante",
-        json={"nombre": "J", "cedula": "0101", "registrado_por": str(seed.ana), "tablas": ["CARD00015"]},
+        json={
+            "nombre": "J",
+            "cedula": "0101",
+            "correo": "ext@correo.com",
+            "tipo": "externo",
+            "registrado_por": str(seed.ana),
+            "tablas": ["CARD00015"],
+        },
     )
     assert resp.status_code == 403
     assert "cola" in resp.json["message"]
@@ -48,7 +55,7 @@ def test_animator_cannot_choose_specific_tables(client: FlaskClient, cols: Colle
 def test_register_rejects_already_assigned_and_rolls_back(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     assert register(client, seed.ana, "0101", ["CARD00002"]).status_code == 201
     resp = register(client, seed.ana, "0202", ["CARD00001", "CARD00002"])
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     # CARD00001 se tomó y luego se liberó (compensación).
     assert cols.tables.find_one({"serial": "CARD00001"})["stateAsigned"] is False  # type: ignore[index]
     assert _user(cols, seed.ana)["usedTables"] == 1
@@ -58,7 +65,14 @@ def _vender(client: FlaskClient, seller: str, uid: ObjectId, cedula: str, cantid
     login_as(client, seller)
     return client.post(
         "/api/registrarParticipante",
-        json={"nombre": "J", "cedula": cedula, "registrado_por": str(uid), "cantidad_tablas": cantidad},
+        json={
+            "nombre": "J",
+            "cedula": cedula,
+            "correo": "ext@correo.com",
+            "tipo": "externo",
+            "registrado_por": str(uid),
+            "cantidad_tablas": cantidad,
+        },
     )
 
 
@@ -86,7 +100,14 @@ def test_sales_take_consecutive_tables_from_the_queue(client: FlaskClient, cols:
     assert (
         client.post(
             "/api/registrarParticipante",
-            json={"nombre": "A", "cedula": "03", "registrado_por": str(seed.admin), "tablas": ["CARD00008"]},
+            json={
+                "nombre": "A",
+                "cedula": "03",
+                "correo": "ext@correo.com",
+                "tipo": "externo",
+                "registrado_por": str(seed.admin),
+                "tablas": ["CARD00008"],
+            },
         ).status_code
         == 201
     )
@@ -101,7 +122,8 @@ def test_sales_take_consecutive_tables_from_the_queue(client: FlaskClient, cols:
 
     # No alcanzan las tablas: no se asigna nada.
     r4 = _vender(client, "ana", seed.ana, "05", 50)
-    assert r4.status_code == 400 and "Solo quedan" in r4.json["message"]
+    assert r4.status_code == 409 and "Solo quedan" in r4.json["message"]
+    assert r4.json["sin_tablas"] is True and r4.json["disponibles"] == 13
     assert cols.participants.count_documents({"cedula": "05"}) == 0
     assert _user(cols, seed.ana)["usedTables"] == 6
 
@@ -123,7 +145,7 @@ def test_consecutive_tables_skip_assigned(client: FlaskClient, seed: Seed) -> No
     assert resp.json["tablas_consecutivas"] == ["CARD00002", "CARD00004", "CARD00005"]
 
     resp = client.post("/api/obtenerTablasConsecutivas", json={"usuario_id": str(seed.ana), "cantidad_tablas": 20})
-    assert resp.status_code == 400
+    assert resp.status_code == 409
 
 
 def _participant_id(client: FlaskClient, seller: object, cedula: str, tablas: list[str]) -> str:
@@ -207,7 +229,14 @@ def test_register_auto_picks_free_reserved_tables(client: FlaskClient, cols: Col
     client.delete(f"/api/participante/{pid}/tabla/{seed.tables['CARD00001']}/1", json={"usuario_id": str(seed.ana)})
     resp = client.post(
         "/api/registrarParticipanteAuto",
-        json={"nombre": "Eva", "cedula": "0303", "registrado_por": str(seed.ana), "cantidad_tablas": 2},
+        json={
+            "nombre": "Eva",
+            "cedula": "0303",
+            "correo": "ext@correo.com",
+            "tipo": "externo",
+            "registrado_por": str(seed.ana),
+            "cantidad_tablas": 2,
+        },
     )
     assert resp.status_code == 201, resp.json
     nuevo = cols.participants.find_one({"cedula": "0303"})
@@ -251,27 +280,73 @@ def test_participant_by_cedula_and_pdf(client: FlaskClient, seed: Seed) -> None:
     assert pdf.data.startswith(b"%PDF")
 
 
-def test_queue_retries_when_another_process_took_a_table(cols: Collections, seed: Seed) -> None:
+def test_queue_is_all_or_nothing_when_another_process_takes_the_last_tables(cols: Collections, seed: Seed) -> None:
     from bingo.errors import ApiError
     from bingo.services.queue import TableQueue
 
-    llamadas: list[list[ObjectId]] = []
+    cola = TableQueue(cols)
+    pid = ObjectId()
+    real_pop = cola._pop
+    llamadas = 0
 
-    def claim(ids: list[ObjectId], _pid: ObjectId) -> None:
-        llamadas.append(ids)
-        if len(llamadas) == 1:  # otro proceso tomó una tabla justo antes
-            cols.tables.update_one({"_id": ids[0]}, {"$set": {"stateAsigned": True}})
-            raise ApiError("Una o más tablas ya están asignadas.")
+    def pop_con_competencia(participant_id: ObjectId) -> ObjectId | None:
+        nonlocal llamadas
+        llamadas += 1
+        if llamadas == 2:  # otro proceso se lleva todas las libres justo ahora
+            cols.tables.update_many({"stateAsigned": {"$ne": True}}, {"$set": {"stateAsigned": True}})
+        return real_pop(participant_id)
 
-    ids = TableQueue(cols).take(2, ObjectId(), claim)
-    assert len(llamadas) == 2 and ids == llamadas[1] and ids[0] != llamadas[0][0]
-
-    def siempre_falla(ids: list[ObjectId], _pid: ObjectId) -> None:
-        raise ApiError("Una o más tablas ya están asignadas.")
-
+    cola._pop = pop_con_competencia  # type: ignore[method-assign]
     try:
-        TableQueue(cols).take(1, ObjectId(), siempre_falla)
+        cola.take(3, pid)
     except ApiError as exc:
-        assert "asignadas" in exc.message
+        assert exc.message == "Solo quedan 1 tablas disponibles."  # la devuelta
     else:  # pragma: no cover
         raise AssertionError("debía fallar")
+    # La primera tabla que alcanzó a tomar volvió a la cola (no quedó a medias).
+    assert cols.tables.count_documents({"assignedToParticipant": pid}) == 0
+    assert cols.tables.find_one({"serial": "CARD00001"})["stateAsigned"] is False  # type: ignore[index]
+
+
+def test_same_cedula_twice_at_once_keeps_one_and_returns_tables(cols: Collections, seed: Seed) -> None:
+    """Doble clic o dos vendedores con la misma cédula: el índice único deja solo un registro."""
+    from bingo.db import ensure_indexes
+    from bingo.errors import Conflict
+    from bingo.services.participants import ParticipantService
+
+    ensure_indexes(cols)
+    assert cols.participants.index_information()["cedula"]["unique"] is True
+    svc = ParticipantService(cols)
+    body = {
+        "nombre": "J",
+        "cedula": "0101",
+        "correo": "ext@correo.com",
+        "tipo": "externo",
+        "registrado_por": str(seed.ana),
+        "cantidad_tablas": 2,
+    }
+    svc.register(body)
+    # Simula la carrera: la segunda petición pasó la revisión previa antes de que existiera la primera.
+    svc._ensure_cedula_free = lambda cedula: None  # type: ignore[method-assign]
+    try:
+        svc.register(body)
+    except Conflict as exc:
+        assert "ya fue registrado por" in exc.message
+    else:  # pragma: no cover
+        raise AssertionError("debía fallar")
+    assert cols.participants.count_documents({"cedula": "0101"}) == 1
+    # Las tablas tomadas por el segundo intento volvieron a la cola.
+    assert cols.tables.count_documents({"stateAsigned": True}) == 2
+    assert cols.tables.find_one({"serial": "CARD00003"})["stateAsigned"] is False  # type: ignore[index]
+
+
+def test_unique_cedula_index_falls_back_when_old_data_has_duplicates(cols: Collections) -> None:
+    from bingo.db import ensure_indexes
+
+    # Base antigua: índice no único y cédulas repetidas.
+    cols.participants.drop_index("cedula")
+    cols.participants.create_index("cedula", name="cedula")
+    cols.participants.insert_many([{"cedula": "1"}, {"cedula": "1"}])
+    ensure_indexes(cols)
+    info = cols.participants.index_information()["cedula"]
+    assert not info.get("unique")

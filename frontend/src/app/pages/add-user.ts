@@ -5,7 +5,7 @@ import { Router } from '@angular/router';
 import { ArrowLeft, Loader, LucideAngularModule, PlusCircle, Save, Search } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
-import { errorMessage } from '../core/http';
+import { errorBody, errorMessage, isConflict } from '../core/http';
 import { SessionService } from '../core/session';
 import { calcularTotal, textoPromociones } from '../core/tablas';
 
@@ -15,6 +15,7 @@ interface Datos {
   nombre: string;
   apellido: string;
   cedula: string;
+  correo: string;
   celular: string;
   nivelCurso: string;
   paralelo: string;
@@ -25,6 +26,7 @@ const VACIO: Datos = {
   nombre: '',
   apellido: '',
   cedula: '',
+  correo: '',
   celular: '',
   nivelCurso: '',
   paralelo: '',
@@ -158,6 +160,28 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
                 placeholder="Número de Celular (Ej. 0987654321)"
                 [class]="input"
               />
+              <div class="md:col-span-2">
+                <input
+                  type="email"
+                  required
+                  [value]="datos().correo"
+                  (input)="set('correo', $event)"
+                  [placeholder]="
+                    tipo() === 'alumno'
+                      ? 'Correo institucional (nombre.apellido.est@uets.edu.ec)'
+                      : 'Correo del comprador (Ej. nombre@gmail.com)'
+                  "
+                  [class]="input"
+                />
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  @if (tipo() === 'alumno') {
+                    Obligatorio. Se carga al buscar la cédula; corríjalo o agréguelo si está mal o
+                    falta. Con este correo el estudiante entra al sistema y ve sus tablas.
+                  } @else {
+                    Obligatorio. Al guardar se le envían sus tablas en PDF a este correo.
+                  }
+                </p>
+              </div>
             </div>
           </fieldset>
 
@@ -346,6 +370,7 @@ export class AddUser {
             nivelCurso: nivelCursoDe(e['Curso'], e['Nivel']),
             paralelo: e['Paralelo'] || '',
             cedula: e['Num documento'] || cedula,
+            correo: e['correo'] || '',
           }));
         }
       }
@@ -363,6 +388,9 @@ export class AddUser {
 
   protected async enviar(event: Event): Promise<void> {
     event.preventDefault();
+    // Ignora clics o Enter repetidos mientras la venta anterior sigue en curso
+    // (mismo efecto que exhaustMap: no se envía una segunda petición).
+    if (this.guardando()) return;
     const cantidad = this.cantidad();
     if (cantidad <= 0) {
       alert('Indique cuántas tablas vende');
@@ -371,6 +399,18 @@ export class AddUser {
     const user = this.usuario();
     const d = this.datos();
     const tipo = this.tipo();
+    const correo = d.correo.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)) {
+      alert('Ingrese un correo válido: ahí se envían las tablas.');
+      return;
+    }
+    if (
+      tipo === 'alumno' &&
+      !/(\.est|_?estudiante)@uets\.edu\.ec$|@est\.uets\.edu\.ec$/.test(correo)
+    ) {
+      alert('El correo del alumno debe ser el institucional (nombre.apellido.est@uets.edu.ec).');
+      return;
+    }
     this.guardando.set(true);
     try {
       const resp = await firstValueFrom(
@@ -382,6 +422,7 @@ export class AddUser {
           nombre: d.nombre,
           apellido: d.apellido,
           cedula: d.cedula,
+          correo,
           celular: d.celular,
           tipo,
           nivelCurso: tipo === 'alumno' ? d.nivelCurso : '',
@@ -396,14 +437,25 @@ export class AddUser {
         const seriales = resp.participante?.seriales || [];
         alert(
           `Participante creado. Tablas asignadas (${seriales.length}): ${seriales.join(', ')}\n` +
-            `Total a pagar: $${resp.participante?.total_pagar ?? this.totalPagar()}`,
+            `Total a pagar: $${resp.participante?.total_pagar ?? this.totalPagar()}\n` +
+            `Las tablas se envían por correo a ${correo}.`,
         );
         this.volver();
       } else {
         alert(resp.message || 'Error al crear el participante');
       }
     } catch (err) {
-      alert(errorMessage(err, 'Error al crear el participante. Por favor, intente nuevamente.'));
+      if (isConflict(err)) {
+        // Otra venta se llevó las tablas o la cédula ya fue registrada: avisar y refrescar la cola.
+        const body = errorBody<{ sin_tablas?: boolean }>(err);
+        alert(
+          errorMessage(err, 'Otro vendedor acaba de vender esas tablas.') +
+            (body?.sin_tablas ? '\nSe actualizó la vista previa de la cola.' : ''),
+        );
+        void this.verCola();
+      } else {
+        alert(errorMessage(err, 'Error al crear el participante. Por favor, intente nuevamente.'));
+      }
     } finally {
       this.guardando.set(false);
     }

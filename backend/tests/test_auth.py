@@ -157,7 +157,7 @@ def test_student_sees_only_their_tables(client: FlaskClient, cols: Collections, 
 
     resp = client.get("/api/mis-tablas")
     assert resp.status_code == 200
-    assert resp.json["estudiante"]["cedula"] == "0101"
+    assert resp.json["titular"]["cedula"] == "0101"
     assert [t["serial"] for t in resp.json["tablas"]] == ["CARD00001", "CARD00002"]
     assert len(resp.json["tablas"][0]["matrix"]) == 5
 
@@ -175,24 +175,9 @@ def test_student_without_purchases_and_staff_on_student_endpoint(
     assert client.get("/api/mis-tablas").json["tablas"] == []
 
 
-# ---------------------------------------------------------- consulta pública
-def test_public_consulta_by_cedula(client: FlaskClient, seed: Seed) -> None:
-    register(client, seed.ana, "0912345678", ["CARD00002", "CARD00001"])
+# ------------------------------------------------- consulta pública eliminada
+def test_public_consulta_by_cedula_no_longer_exists(client: FlaskClient, seed: Seed) -> None:
+    from .conftest import logout
+
     logout(client)
-    resp = client.get("/api/consulta/0912345678")
-    assert resp.status_code == 200
-    participante = resp.json["participante"]
-    assert participante["nombre"] == "Juan"
-    assert [t["serial"] for t in participante["tablas"]] == ["CARD00001", "CARD00002"]
-    # Solo nombre y tablas: nada de celular, cédula, animador, etc.
-    assert set(participante) == {"nombre", "apellido", "tablas"}
-    assert set(participante["tablas"][0]) == {"serial", "matrix", "won"}
-
-    assert client.get("/api/consulta/0999999999").status_code == 404
-    assert client.get("/api/consulta/abc").status_code == 400
-    assert client.get("/api/consulta/123").status_code == 400
-
-
-def test_public_consulta_participant_without_tables(client: FlaskClient, cols: Collections) -> None:
-    cols.participants.insert_one({"nombre": "Sin", "apellido": "Tablas", "cedula": "0911111111", "tablas": []})
-    assert client.get("/api/consulta/0911111111").json["participante"]["tablas"] == []
+    assert client.get("/api/consulta/0912345678").status_code in (401, 404)

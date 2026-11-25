@@ -11,6 +11,7 @@ from ..config import Settings
 from ..db import get_db
 from ..errors import ApiError, NotFound
 from ..services.animators import AnimatorService
+from ..services.animators_import import AnimatorImport
 from ..services.new_game import NewGameService
 from ..services.purge import ParticipantPurge
 from ..services.students import StudentService, serialize_student
@@ -71,6 +72,73 @@ def actualizar_animador(animador_id: str) -> Response:
     data = json_body()
     animador = _animators().update(animador_id, data, reassign=bool(data.get("reasignar")))
     return jsonify({"success": True, "message": "Animador actualizado.", "animador": animador})
+
+
+@bp.post("/animadores/lote")
+@require_admin
+def crear_vendedores_lote() -> tuple[Response, int]:
+    """Alta de varios vendedores solo con su correo (el nombre se completa en su primer ingreso)."""
+    data = json_body()
+    result = _animators().create_batch(data.get("correos"), data.get("rol"))
+    message = f"Se crearon {len(result['creados'])} vendedores."
+    return jsonify({"success": True, "message": message, **result}), 201
+
+
+def _upload() -> tuple[bytes, str]:
+    file = request.files.get("archivo")
+    if file is None or not file.filename:
+        raise ApiError("Seleccione el PDF del DECE o un Excel (.xlsx) con los animadores.")
+    data: bytes = file.read()
+    return data, file.filename
+
+
+def _animator_import() -> AnimatorImport:
+    s = _settings()
+    return AnimatorImport(get_db(), s.staff_domain, s.backup_dir)
+
+
+@bp.post("/animadores/importar/vista-previa")
+@require_admin
+def vista_previa_animadores() -> Response:
+    """Analiza la lista oficial sin guardar nada: nuevos, cambios, quiénes pierden acceso y errores."""
+    data, nombre = _upload()
+    return jsonify({"success": True, **_animator_import().preview(data, nombre)})
+
+
+@bp.post("/animadores/importar")
+@require_admin
+def importar_animadores() -> Response:
+    """Aplica la lista oficial: correo y curso de cada animador (con respaldo previo)."""
+    data, nombre = _upload()
+    result = _animator_import().apply(data, request.form.get("confirmacion"), nombre)
+    logger.warning(
+        "Animadores importados por %s: %s nuevos, %s actualizados, %s sin acceso, respaldo %s",
+        current_identity().email,
+        result["nuevos"],
+        result["actualizados"],
+        result["pierden_acceso"],
+        result["respaldo"],
+    )
+    message = f"Lista aplicada: {result['validas']} animadores con acceso."
+    return jsonify({"success": True, "message": message, **result})
+
+
+@bp.get("/accesos-rechazados")
+@require_admin
+def accesos_rechazados() -> Response:
+    """Correos del personal que intentaron entrar sin estar autorizados (para habilitarlos)."""
+    intentos = [
+        {k: d.get(k) for k in ("correo", "nombre", "intentos", "ultimo")}
+        for d in get_db().access_log.find().sort("ultimo", -1).limit(200)
+    ]
+    return jsonify({"success": True, "intentos": intentos})
+
+
+@bp.delete("/accesos-rechazados")
+@require_admin
+def descartar_acceso_rechazado() -> Response:
+    get_db().access_log.delete_one({"correo": str(request.args.get("correo", "")).strip().lower()})
+    return jsonify({"success": True})
 
 
 @bp.delete("/animadores/<animador_id>")

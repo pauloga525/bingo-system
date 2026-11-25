@@ -109,7 +109,13 @@ def test_perfil_y_venta_solo_externos(admin: FlaskClient, cols: Collections, see
     # Sin curso: Mi curso no aplica.
     assert admin.get("/api/mi-curso").status_code == 404
 
-    body = {"nombre": "Ext", "cedula": "0999999991", "registrado_por": uid, "cantidad_tablas": 2}
+    body = {
+        "nombre": "Ext",
+        "cedula": "0999999991",
+        "correo": "ext@correo.com",
+        "registrado_por": uid,
+        "cantidad_tablas": 2,
+    }
     resp = admin.post("/api/registrarParticipante", json={**body, "tipo": "alumno"})
     assert resp.status_code == 403 and "externos" in resp.json["message"]
     resp = admin.post("/api/registrarParticipante", json={**body, "tipo": "externo"})
@@ -118,7 +124,13 @@ def test_perfil_y_venta_solo_externos(admin: FlaskClient, cols: Collections, see
     assert p is not None and p["tipo"] == "externo" and p["rol_vendedor"] == "oratorio" and p["total_pagar"] == 5
 
     # Registro automático: sin tipo se asume externo; con otro tipo se rechaza.
-    auto = {"nombre": "Ext2", "cedula": "0999999992", "registrado_por": uid, "cantidad_tablas": 1}
+    auto = {
+        "nombre": "Ext2",
+        "cedula": "0999999992",
+        "correo": "ext2@correo.com",
+        "registrado_por": uid,
+        "cantidad_tablas": 1,
+    }
     assert admin.post("/api/registrarParticipanteAuto", json={**auto, "tipo": "docente"}).status_code == 403
     assert admin.post("/api/registrarParticipanteAuto", json=auto).status_code == 201
     p2 = cols.participants.find_one({"cedula": "0999999992"})
@@ -126,6 +138,7 @@ def test_perfil_y_venta_solo_externos(admin: FlaskClient, cols: Collections, see
 
 
 def test_animador_sigue_vendiendo_a_alumnos(client: FlaskClient, cols: Collections, seed: Seed) -> None:
+    cols.students.insert_one({"Num documento": "0911", "Nombre": "A", "Primer Apellido": "B"})
     perfil = client.get("/api/auth/me").json["usuario"]
     assert perfil["cargo"] == "animador" and perfil["solo_externos"] is False
     resp = client.post(
@@ -135,6 +148,7 @@ def test_animador_sigue_vendiendo_a_alumnos(client: FlaskClient, cols: Collectio
             "cedula": "0911",
             "registrado_por": str(seed.ana),
             "cantidad_tablas": 1,
+            "correo": "a.b.est@uets.edu.ec",
             "tipo": "alumno",
         },
     )
@@ -150,7 +164,14 @@ def test_reportes_por_rol_vendedor_y_promociones(admin: FlaskClient, cols: Colle
     assert (
         admin.post(
             "/api/registrarParticipante",
-            json={"nombre": "P1", "cedula": "01", "registrado_por": str(seed.ana), "cantidad_tablas": 7},
+            json={
+                "nombre": "P1",
+                "cedula": "01",
+                "correo": "ext@correo.com",
+                "tipo": "externo",
+                "registrado_por": str(seed.ana),
+                "cantidad_tablas": 7,
+            },
         ).status_code
         == 201
     )

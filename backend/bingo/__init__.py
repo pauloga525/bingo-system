@@ -13,14 +13,16 @@ from .config import BASE_DIR, Settings
 from .db import Doc, ensure_indexes, init_db
 from .errors import register_error_handlers
 from .routes import admin, auth, board, consulta, game, mi_curso, participants, tables, users
+from .services.mailer import Mailer, SmtpConfig, SmtpMailer
 
 
 def create_app(
     settings: Settings | None = None,
     mongo_client: MongoClient[Doc] | None = None,
     google_verifier: GoogleVerifier | None = None,
+    mailer: Mailer | None = None,
 ) -> Flask:
-    """Crea la app. ``mongo_client`` y ``google_verifier`` permiten inyectar dobles en los tests."""
+    """Crea la app. ``mongo_client``, ``google_verifier`` y ``mailer`` permiten inyectar dobles en los tests."""
     settings = settings or Settings.from_env()
     logging.basicConfig(
         level=logging.DEBUG if settings.debug else logging.INFO,
@@ -39,6 +41,9 @@ def create_app(
     CORS(app, resources={r"/api/*": {"origins": settings.cors_origin_list}})
     register_error_handlers(app)
     init_auth(app, settings, google_verifier)
+    app.extensions["mailer"] = mailer or SmtpMailer(
+        SmtpConfig(settings.smtp_host, settings.smtp_port, settings.smtp_user, settings.smtp_pass, settings.mail_from)
+    )
     for module in (auth, consulta, admin, mi_curso, board, game, participants, tables, users):
         app.register_blueprint(module.bp)
     app.after_request(_security_headers)

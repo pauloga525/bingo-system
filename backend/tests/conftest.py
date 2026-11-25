@@ -15,6 +15,7 @@ from bingo import create_app
 from bingo.config import Settings
 from bingo.db import Collections
 from bingo.domain.cards import format_serial, generate_bingo_card
+from bingo.services.mailer import MemoryMailer
 
 # mongomock 4.3 no acepta el argumento ``sort`` que pymongo>=4.11 pasa en bulk_write.
 _original_add_update = mongomock.collection.BulkOperationBuilder.add_update
@@ -47,6 +48,7 @@ def settings(tmp_path: Path) -> Settings:
         secret_key="clave-de-pruebas",
         admin_emails="admin@uets.edu.ec",
         admin_usuario="ADM",
+        mail_async=False,  # el correo se envía dentro de la petición (MemoryMailer)
     )
 
 
@@ -71,7 +73,7 @@ def mongo() -> Iterator[mongomock.MongoClient]:
 
 @pytest.fixture
 def app(settings: Settings, mongo: mongomock.MongoClient) -> Flask:
-    application = create_app(settings, mongo, fake_google_verifier)
+    application = create_app(settings, mongo, fake_google_verifier, MemoryMailer())
     application.config["TESTING"] = True
     return application
 
@@ -186,7 +188,15 @@ def register(client: FlaskClient, seller: ObjectId, cedula: str, tablas: list[st
     login_as(client, "admin")
     resp = client.post(
         "/api/registrarParticipante",
-        json={"nombre": "Juan", "apellido": "Pérez", "cedula": cedula, "tablas": tablas, "registrado_por": str(seller)},
+        json={
+            "nombre": "Juan",
+            "apellido": "Pérez",
+            "cedula": cedula,
+            "correo": f"c{cedula}@correo.com",
+            "tipo": "externo",
+            "tablas": tablas,
+            "registrado_por": str(seller),
+        },
     )
     if seller in _EMAIL_BY_ID:
         login_as(client, _EMAIL_BY_ID[seller])

@@ -41,5 +41,9 @@ export const errorBody = <T = Record<string, unknown>>(err: unknown): T | null =
     ? (err.error as T)
     : null;
 
+/** Respuesta 409 del servidor (otra venta se llevó las tablas, cédula ya registrada, ...). */
+export const isConflict = (err: unknown): boolean =>
+  err instanceof HttpErrorResponse && err.status === 409;
+
 /** Deja solo los dígitos de un texto. */
 export const onlyDigits = (value: unknown): string => String(value ?? '').replace(/\D/g, '');

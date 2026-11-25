@@ -4,7 +4,17 @@
 // Los demás roles no tienen curso y solo venden a externos.
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
-import { Edit, LucideAngularModule, Plus, Search, Trash2 } from 'lucide-angular';
+import { RouterLink } from '@angular/router';
+import {
+  Edit,
+  LucideAngularModule,
+  Mail,
+  Plus,
+  Power,
+  Search,
+  Trash2,
+  Upload,
+} from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
 import { errorBody, errorMessage } from '../core/http';
@@ -27,6 +37,12 @@ interface Animador extends CursoBase {
   curso_asignado: boolean;
   usuario: string | null;
   usuario_id: string | null;
+  activo: boolean;
+  /** sin_acceso | pendiente (aún no entra) | activo */
+  estado: 'sin_acceso' | 'pendiente' | 'activo';
+  nombre_pendiente: boolean;
+  primer_ingreso: string | null;
+  ultimo_ingreso: string | null;
   /** Tablas vendidas y monto (las tablas se venden en cola, sin reservas). */
   ventas?: { tablas: number; monto: number };
 }
@@ -51,11 +67,24 @@ const cursoKey = (c: CursoBase): string =>
 const cursoNombre = (c: CursoBase): string =>
   [c.curso, c.especialidad, `${c.nivel}°`, c.paralelo].filter(Boolean).join(' · ');
 
-const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Vendidas', ''];
+const HEADERS = ['Nombre', 'Rol', 'Correo', 'Estado', 'Curso asignado', 'Vendidas', ''];
+
+interface IntentoRechazado {
+  correo: string;
+  nombre?: string;
+  intentos: number;
+  ultimo: string;
+}
+
+const ESTADOS: Record<Animador['estado'], { texto: string; clase: string }> = {
+  activo: { texto: 'Activo', clase: 'bg-green-100 text-green-800' },
+  pendiente: { texto: 'Pendiente 1.er ingreso', clase: 'bg-yellow-100 text-yellow-800' },
+  sin_acceso: { texto: 'Sin acceso', clase: 'bg-gray-200 text-gray-700' },
+};
 
 @Component({
   selector: 'app-animadores-admin',
-  imports: [LucideAngularModule, CrudForm],
+  imports: [LucideAngularModule, CrudForm, RouterLink],
   template: `
     <div class="p-6 max-w-6xl mx-auto">
       <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -72,14 +101,59 @@ const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Vendid
             }
           </p>
         </div>
-        <button
-          type="button"
-          (click)="editing.set({ cursoKey: '', rol: 'animador' })"
-          class="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
-        >
-          <lucide-icon [img]="PlusIcon" [size]="16" /> Nuevo vendedor
-        </button>
+        <div class="flex flex-wrap gap-2">
+          <a
+            routerLink="/admin/mantenimiento"
+            fragment="importar-animadores"
+            class="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 dark:text-white px-4 py-2 rounded-lg"
+          >
+            <lucide-icon [img]="UploadIcon" [size]="16" /> Importar lista DECE
+          </a>
+          <button
+            type="button"
+            (click)="lote.set({ correos: '', rol: 'financiero' })"
+            class="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 dark:text-white px-4 py-2 rounded-lg"
+          >
+            <lucide-icon [img]="MailIcon" [size]="16" /> Agregar varios por correo
+          </button>
+          <button
+            type="button"
+            (click)="editing.set({ cursoKey: '', rol: 'animador' })"
+            class="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
+          >
+            <lucide-icon [img]="PlusIcon" [size]="16" /> Nuevo vendedor
+          </button>
+        </div>
       </div>
+
+      @if (intentos().length) {
+        <div
+          class="mb-4 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-4"
+        >
+          <h2 class="font-semibold text-amber-800 dark:text-amber-300 mb-2">
+            Intentaron entrar sin estar autorizados ({{ intentos().length }})
+          </h2>
+          <ul class="text-sm space-y-1">
+            @for (i of intentos(); track i.correo) {
+              <li class="flex flex-wrap items-center gap-2 text-gray-800 dark:text-gray-200">
+                <strong>{{ i.correo }}</strong>
+                @if (i.nombre) {
+                  <span>({{ i.nombre }})</span>
+                }
+                <span class="text-gray-500"
+                  >{{ i.intentos }} intento(s) · último {{ i.ultimo }}</span
+                >
+                <button type="button" (click)="habilitar(i)" class="text-blue-600 hover:underline">
+                  Habilitar
+                </button>
+                <button type="button" (click)="descartar(i)" class="text-gray-500 hover:underline">
+                  Descartar
+                </button>
+              </li>
+            }
+          </ul>
+        </div>
+      }
 
       <div class="flex flex-wrap gap-2 mb-4">
         <form (submit)="$event.preventDefault(); cargar()" class="flex gap-2">
@@ -133,8 +207,16 @@ const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Vendid
                     @if (a.correo) {
                       {{ a.correo }}
                     } @else {
-                      <span class="text-gray-400">sin acceso</span>
+                      <span class="text-gray-400">sin correo</span>
                     }
+                  </td>
+                  <td class="px-3 py-2 whitespace-nowrap">
+                    <span
+                      class="text-xs px-2 py-0.5 rounded"
+                      [class]="estados[a.estado || 'activo'].clase"
+                      [title]="a.ultimo_ingreso ? 'Último ingreso: ' + a.ultimo_ingreso : ''"
+                      >{{ estados[a.estado || 'activo'].texto }}</span
+                    >
                   </td>
                   <td class="px-3 py-2">
                     @if (a.curso_asignado) {
@@ -151,7 +233,6 @@ const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Vendid
                       >
                     }
                   </td>
-                  <td class="px-3 py-2">{{ a.usuario || '—' }}</td>
                   <td class="px-3 py-2 whitespace-nowrap">
                     {{ a.ventas?.tablas || 0 }} (\${{ a.ventas?.monto || 0 }})
                   </td>
@@ -164,6 +245,16 @@ const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Vendid
                     >
                       <lucide-icon [img]="EditIcon" [size]="16" />
                     </button>
+                    @if (a.correo) {
+                      <button
+                        type="button"
+                        (click)="cambiarActivo(a)"
+                        [class]="a.activo ? 'text-amber-600 mr-3' : 'text-green-600 mr-3'"
+                        [title]="a.activo ? 'Desactivar acceso' : 'Reactivar acceso'"
+                      >
+                        <lucide-icon [img]="PowerIcon" [size]="16" />
+                      </button>
+                    }
                     <button
                       type="button"
                       (click)="eliminar(a)"
@@ -184,6 +275,16 @@ const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Vendid
             </tbody>
           </table>
         </div>
+      }
+
+      @if (lote(); as l) {
+        <app-crud-form
+          title="Agregar vendedores por correo"
+          [fields]="camposLote"
+          [initial]="l"
+          [save]="guardarLote"
+          (closed)="lote.set(null)"
+        />
       }
 
       @if (editing(); as e) {
@@ -216,6 +317,29 @@ export class AnimadoresAdmin implements OnInit {
   protected readonly error = signal('');
   /** null = cerrado, {...} = nuevo o editar */
   protected readonly editing = signal<CrudValues | null>(null);
+  protected readonly lote = signal<CrudValues | null>(null);
+  protected readonly intentos = signal<IntentoRechazado[]>([]);
+  protected readonly estados = ESTADOS;
+  protected readonly MailIcon = Mail;
+  protected readonly PowerIcon = Power;
+  protected readonly UploadIcon = Upload;
+  protected readonly camposLote: CrudField[] = [
+    {
+      name: 'correos',
+      label: 'Correos @uets.edu.ec (separados por comas o en líneas)',
+      required: true,
+      wide: true,
+      placeholder: 'persona1@uets.edu.ec, persona2@uets.edu.ec',
+    },
+    {
+      name: 'rol',
+      label: 'Rol',
+      type: 'select',
+      required: true,
+      wide: true,
+      options: ROL_OPCIONES,
+    },
+  ];
 
   protected readonly conAcceso = computed(() => this.animadores().filter((a) => a.correo).length);
   protected readonly cursosLibres = computed(() => this.cursos().filter((c) => !c.animador).length);
@@ -303,6 +427,10 @@ export class AnimadoresAdmin implements OnInit {
       ]);
       this.animadores.set(data.animadores || []);
       this.cursos.set(cursos.cursos || []);
+      const intentos = await firstValueFrom(
+        this.http.get<{ intentos?: IntentoRechazado[] }>('/api/accesos-rechazados'),
+      );
+      this.intentos.set(intentos.intentos || []);
     } catch (err) {
       this.error.set(errorMessage(err, 'Error al cargar animadores.'));
     } finally {
@@ -354,6 +482,45 @@ export class AnimadoresAdmin implements OnInit {
     }
     await this.cargar();
   };
+
+  /** Alta de varios vendedores solo con el correo; el nombre lo confirman en su primer ingreso. */
+  protected readonly guardarLote = async (values: CrudValues): Promise<void> => {
+    const resp = await firstValueFrom(
+      this.http.post<{ creados: string[]; existentes: string[]; invalidos: string[] }>(
+        '/api/animadores/lote',
+        { correos: values['correos'], rol: values['rol'] },
+      ),
+    );
+    alert(
+      `Creados: ${resp.creados.length}` +
+        (resp.existentes.length ? `\nYa existían: ${resp.existentes.join(', ')}` : '') +
+        (resp.invalidos.length ? `\nNo válidos: ${resp.invalidos.join(', ')}` : ''),
+    );
+    await this.cargar();
+  };
+
+  protected async cambiarActivo(a: Animador): Promise<void> {
+    const accion = a.activo ? 'desactivar' : 'reactivar';
+    if (!confirm(`¿${accion[0].toUpperCase() + accion.slice(1)} el acceso de ${a.nombre}?`)) return;
+    try {
+      await firstValueFrom(this.http.put(`/api/animadores/${a._id}`, { activo: !a.activo }));
+      await this.cargar();
+    } catch (err) {
+      alert(errorMessage(err, `No se pudo ${accion}.`));
+    }
+  }
+
+  /** Abre el formulario de nuevo vendedor con el correo que intentó entrar. */
+  protected habilitar(i: IntentoRechazado): void {
+    this.editing.set({ cursoKey: '', rol: 'animador', correo: i.correo, nombre: i.nombre || '' });
+  }
+
+  protected async descartar(i: IntentoRechazado): Promise<void> {
+    await firstValueFrom(
+      this.http.delete('/api/accesos-rechazados', { params: { correo: i.correo } }),
+    );
+    this.intentos.update((l) => l.filter((x) => x.correo !== i.correo));
+  }
 
   protected async eliminar(a: Animador): Promise<void> {
     if (!confirm(`¿Eliminar al animador ${a.nombre}?`)) return;

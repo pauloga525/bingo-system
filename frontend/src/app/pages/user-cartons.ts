@@ -8,6 +8,7 @@ import {
   Eye,
   Loader,
   LucideAngularModule,
+  Mail,
   Plus,
   Search,
   Trash2,
@@ -46,6 +47,29 @@ import { Participante } from './user-list';
               </h1>
               <p class="text-gray-600 dark:text-gray-300">
                 Cédula: {{ participante()?.cedula || '-' }}
+              </p>
+              <p class="text-sm text-gray-600 dark:text-gray-300 flex flex-wrap items-center gap-2">
+                <lucide-icon [img]="MailIcon" [size]="14" />
+                {{ participante()?.correo || 'sin correo' }}
+                @if (estadoCorreo(); as e) {
+                  <span class="text-xs px-2 py-0.5 rounded" [class]="e.clase">{{ e.texto }}</span>
+                }
+                <button
+                  type="button"
+                  (click)="reenviar()"
+                  [disabled]="enviando() || !participante()?.correo"
+                  class="text-blue-600 hover:underline disabled:opacity-50"
+                >
+                  {{ enviando() ? 'Enviando...' : 'Reenviar tablas por correo' }}
+                </button>
+                <button
+                  type="button"
+                  (click)="cambiarCorreo()"
+                  [disabled]="enviando()"
+                  class="text-blue-600 hover:underline disabled:opacity-50"
+                >
+                  Cambiar correo
+                </button>
               </p>
             </div>
             <a
@@ -145,6 +169,18 @@ export class UserCartons implements OnInit {
   protected readonly SearchIcon = Search;
   protected readonly TrashIcon = Trash2;
   protected readonly XIcon = X;
+  protected readonly MailIcon = Mail;
+  protected readonly enviando = signal(false);
+  protected readonly estadoCorreo = computed(() => {
+    const p = this.participante();
+    const estados: Record<string, { texto: string; clase: string }> = {
+      enviado: { texto: 'correo enviado', clase: 'bg-green-100 text-green-800' },
+      pendiente: { texto: 'enviando correo…', clase: 'bg-yellow-100 text-yellow-800' },
+      error: { texto: 'el correo falló', clase: 'bg-red-100 text-red-800' },
+      sin_configurar: { texto: 'correo no configurado', clase: 'bg-gray-200 text-gray-700' },
+    };
+    return p?.correo_estado ? estados[p.correo_estado] || null : null;
+  });
 
   /** Parámetro de ruta :userId (id del participante). */
   readonly userId = input.required<string>();
@@ -187,6 +223,33 @@ export class UserCartons implements OnInit {
     } finally {
       this.loading.set(false);
     }
+  }
+
+  /** Reenvía las tablas al correo del participante; con ``correo`` antes lo corrige. */
+  protected async reenviar(correo?: string): Promise<void> {
+    if (this.enviando()) return;
+    this.enviando.set(true);
+    try {
+      const resp = await firstValueFrom(
+        this.http.post<{ message?: string }>(
+          `/api/participante/${this.userId()}/correo`,
+          correo ? { correo } : {},
+        ),
+      );
+      alert(resp.message || 'Correo en camino.');
+      await this.cargar();
+    } catch (err) {
+      alert(errorMessage(err, 'No se pudo enviar el correo.'));
+    } finally {
+      this.enviando.set(false);
+    }
+  }
+
+  protected async cambiarCorreo(): Promise<void> {
+    const actual = this.participante()?.correo || '';
+    const nuevo = prompt('Nuevo correo del participante (se le reenviarán sus tablas):', actual);
+    if (nuevo === null || !nuevo.trim() || nuevo.trim() === actual) return;
+    await this.reenviar(nuevo.trim());
   }
 
   protected async eliminar(carton: Tabla): Promise<void> {

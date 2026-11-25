@@ -1,4 +1,4 @@
-// Inicio de sesión con Google (cuentas @uets.edu.ec).
+// Inicio de sesión: estudiantes y personal UETS con Google; público general con cédula + correo + código.
 import { HttpClient } from '@angular/common/http';
 import {
   AfterViewInit,
@@ -10,13 +10,14 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 
 import { GOOGLE_CLIENT_ID } from '../core/config';
 import { loadGoogleId } from '../core/google';
 import { errorBody, errorMessage } from '../core/http';
 import { SesionResponse, SessionService, homeFor } from '../core/session';
+import { AccesoExterno } from './acceso-externo';
 import { RegistroEstudiante } from './registro-estudiante';
 
 interface RegistroPendiente {
@@ -26,7 +27,7 @@ interface RegistroPendiente {
 
 @Component({
   selector: 'app-login',
-  imports: [RouterLink, RegistroEstudiante],
+  imports: [RegistroEstudiante, AccesoExterno],
   template: `
     <div class="min-h-screen bg-gray-900 flex items-center justify-center px-4 py-12">
       <div
@@ -45,9 +46,27 @@ interface RegistroPendiente {
             </svg>
           </div>
           <h2 class="text-3xl font-bold text-white">Bingo UETS</h2>
-          <p class="text-sm text-gray-400 mt-2">
-            Ingresa con tu cuenta institucional &#64;uets.edu.ec
-          </p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 bg-gray-900 p-1 rounded-xl" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            [attr.aria-selected]="modo() === 'uets'"
+            (click)="cambiarModo('uets')"
+            [class]="modo() === 'uets' ? tabActiva : tabInactiva"
+          >
+            Estudiante / personal UETS
+          </button>
+          <button
+            type="button"
+            role="tab"
+            [attr.aria-selected]="modo() === 'externo'"
+            (click)="cambiarModo('externo')"
+            [class]="modo() === 'externo' ? tabActiva : tabInactiva"
+          >
+            Público general
+          </button>
         </div>
 
         @if (expirada && !error()) {
@@ -72,7 +91,14 @@ interface RegistroPendiente {
           />
         }
 
-        <div [class]="registro() ? 'hidden' : 'flex flex-col items-center gap-3'">
+        <div
+          [class]="
+            registro() || modo() === 'externo' ? 'hidden' : 'flex flex-col items-center gap-3'
+          "
+        >
+          <p class="text-sm text-gray-400 text-center">
+            Ingresa con tu cuenta institucional &#64;uets.edu.ec
+          </p>
           <div #googleButton></div>
           @if (loading()) {
             <p class="text-sm text-gray-400">Validando cuenta...</p>
@@ -80,7 +106,11 @@ interface RegistroPendiente {
         </div>
 
         <!-- Solo en desarrollo (ng serve): entra sin Google contra el backend de demo local. -->
-        @if (devMode && !registro()) {
+        @if (modo() === 'externo') {
+          <app-acceso-externo (entrar)="entrar($event)" />
+        }
+
+        @if (devMode && !registro() && modo() === 'uets') {
           <div class="border border-dashed border-yellow-600 rounded-lg p-4 space-y-2">
             <p class="text-xs text-yellow-400 text-center">Login de prueba (solo desarrollo)</p>
             @for (u of usuariosDemo; track u.correo) {
@@ -95,12 +125,18 @@ interface RegistroPendiente {
           </div>
         }
 
-        <p class="text-center text-sm text-gray-400">
-          ¿Compraste tablas y no tienes cuenta institucional?
-          <a routerLink="/consulta" class="text-blue-400 hover:underline"
-            >Consulta tus tablas con tu cédula</a
-          >
-        </p>
+        @if (modo() === 'uets') {
+          <p class="text-center text-sm text-gray-400">
+            ¿Compraste tablas y no tienes cuenta institucional?
+            <button
+              type="button"
+              (click)="cambiarModo('externo')"
+              class="text-blue-400 hover:underline"
+            >
+              Entra como público general
+            </button>
+          </p>
+        }
       </div>
     </div>
   `,
@@ -112,7 +148,15 @@ export class Login implements AfterViewInit, OnDestroy {
   private readonly googleButton = viewChild.required<ElementRef<HTMLDivElement>>('googleButton');
   private destroyed = false;
 
-  protected readonly expirada = !!inject(ActivatedRoute).snapshot.queryParamMap.get('expirada');
+  private readonly query = inject(ActivatedRoute).snapshot.queryParamMap;
+  protected readonly expirada = !!this.query.get('expirada');
+  /** 'uets' = Google (estudiantes y personal); 'externo' = cédula + correo + código. */
+  protected readonly modo = signal<'uets' | 'externo'>(
+    this.query.get('externo') ? 'externo' : 'uets',
+  );
+  protected readonly tabActiva =
+    'py-2 rounded-lg text-sm font-semibold bg-yellow-500 text-gray-900';
+  protected readonly tabInactiva = 'py-2 rounded-lg text-sm text-gray-300 hover:bg-gray-800';
   protected readonly error = signal('');
   protected readonly loading = signal(false);
   /** Datos para registrar a un estudiante que entra por primera vez. */
@@ -149,6 +193,11 @@ export class Login implements AfterViewInit, OnDestroy {
     } catch {
       this.error.set('No se pudo cargar el inicio de sesión de Google. Revise su conexión.');
     }
+  }
+
+  protected cambiarModo(modo: 'uets' | 'externo'): void {
+    this.modo.set(modo);
+    this.error.set('');
   }
 
   ngOnDestroy(): void {

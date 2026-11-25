@@ -10,11 +10,13 @@ from collections.abc import Iterable
 from io import BytesIO
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request, send_file
+from flask import Blueprint, Response, current_app, jsonify, request, send_file
 
 from ..auth import current_identity
+from ..config import Settings
 from ..db import Doc, get_db
 from ..errors import ApiError, Forbidden
+from ..services.notifications import TablesMailer
 from ..services.participants import ParticipantService, is_admin, table_summary
 from ..services.pdf_render import render_cards_pdf
 from ..utils import json_body, require_object_id, safe_int, serialize_mongo_doc, try_object_id
@@ -22,14 +24,25 @@ from ..utils import json_body, require_object_id, safe_int, serialize_mongo_doc,
 bp = Blueprint("participants", __name__, url_prefix="/api")
 
 
+def _settings() -> Settings:
+    settings: Settings = current_app.config["SETTINGS"]
+    return settings
+
+
 def _svc() -> ParticipantService:
-    return ParticipantService(get_db())
+    return ParticipantService(get_db(), _settings().student_email_regex)
+
+
+def _mail() -> TablesMailer:
+    s = _settings()
+    return TablesMailer(get_db(), current_app.extensions["mailer"], s.panel_url, run_async=s.mail_async)
 
 
 @bp.post("/registrarParticipante")
 @bp.post("/CreateParticipantes")
 def registrar_participante() -> tuple[Response, int]:
     participante = _svc().register(json_body(), allow_serials=current_identity().is_admin)
+    _mail().notify(require_object_id(participante["_id"], "ID inválido."))
     return jsonify(
         {"success": True, "message": "Participante registrado exitosamente.", "participante": participante}
     ), 201
@@ -38,9 +51,27 @@ def registrar_participante() -> tuple[Response, int]:
 @bp.post("/registrarParticipanteAuto")
 def registrar_participante_auto() -> tuple[Response, int]:
     participante_id = _svc().register_auto(json_body())
+    _mail().notify(participante_id)
     return jsonify(
         {"success": True, "message": "Participante registrado correctamente", "participante_id": str(participante_id)}
     ), 201
+
+
+@bp.post("/participante/<participante_id>/correo")
+def reenviar_correo(participante_id: str) -> Response:
+    """Reenvía las tablas por correo; con ``correo`` en el cuerpo, antes lo corrige."""
+    pid = require_object_id(participante_id, "ID de participante inválido.")
+    _svc().change_email(pid, json_body().get("correo"), current_identity().user_id)
+    _mail().notify(pid)
+    estado = get_db().participants.find_one({"_id": pid}, {"correo": 1, "correo_estado": 1}) or {}
+    return jsonify(
+        {
+            "success": True,
+            "message": f"Enviando las tablas a {estado.get('correo')}.",
+            "correo": estado.get("correo"),
+            "correo_estado": estado.get("correo_estado"),
+        }
+    )
 
 
 @bp.get("/obtenerTablasParticipante/<string:participante_id>")
@@ -108,6 +139,7 @@ def agregar_tablas_participante(participante_id: str, tipo_usuario: str) -> Resp
     seriales = _svc().add_tables(
         pid, refs, data.get("usuario_id"), data.get("cantidad"), allow_serials=current_identity().is_admin
     )
+    _mail().notify(pid)
     return jsonify({"success": True, "message": "Tablas agregadas correctamente.", "seriales": seriales})
 
 

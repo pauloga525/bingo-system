@@ -63,7 +63,17 @@ def test_register_requires_quantity(client: FlaskClient, seed: Seed) -> None:
         ({"nombre": "J", "cedula": "1", "registrado_por": "x", "cantidad_tablas": 0}, 400),
         ({"nombre": "J", "cedula": "1", "registrado_por": "x"}, 400),  # id inválido
         ({"nombre": "J", "cedula": "1", "registrado_por": MISSING}, 404),
-        ({"nombre": "J", "cedula": "1", "registrado_por": "SEED", "cantidad_tablas": 21}, 400),  # solo hay 20
+        (
+            {
+                "nombre": "J",
+                "cedula": "1",
+                "correo": "ext@correo.com",
+                "tipo": "externo",
+                "registrado_por": "SEED",
+                "cantidad_tablas": 21,
+            },
+            409,
+        ),  # solo hay 20
     ],
 )
 def test_register_auto_validations(client: FlaskClient, seed: Seed, body: dict[str, Any], status: int) -> None:
@@ -74,10 +84,17 @@ def test_register_auto_validations(client: FlaskClient, seed: Seed, body: dict[s
 
 
 def test_register_auto_without_free_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
-    body = {"nombre": "J", "cedula": "1", "registrado_por": str(seed.ana), "cantidad_tablas": 2}
+    body = {
+        "nombre": "J",
+        "cedula": "1",
+        "correo": "ext@correo.com",
+        "tipo": "externo",
+        "registrado_por": str(seed.ana),
+        "cantidad_tablas": 2,
+    }
     cols.tables.update_many({}, {"$set": {"stateAsigned": True}})
     resp = client.post("/api/registrarParticipanteAuto", json=body)
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     assert resp.json["message"] == "Solo quedan 0 tablas disponibles."
     assert cols.participants.count_documents({}) == 0
 
@@ -98,7 +115,7 @@ def test_add_tables_validations(client: FlaskClient, seed: Seed) -> None:
 def test_add_tables_beyond_free_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     pid = _participant(client, seed)
     resp = client.post(f"/api/participante/{pid}/tablas/1", json={"usuario_id": str(seed.ana), "cantidad": 30})
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     assert "Solo quedan" in resp.json["message"]
 
 

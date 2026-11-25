@@ -91,7 +91,14 @@ def test_new_tables_are_sold_from_the_queue(jugado: FlaskClient, cols: Collectio
     primera = jugado.get("/api/cola-tablas").json["siguiente"]
     resp = jugado.post(
         "/api/registrarParticipante",
-        json={"nombre": "N", "cedula": "0101", "registrado_por": str(seed.ana), "cantidad_tablas": 2},
+        json={
+            "nombre": "N",
+            "cedula": "0101",
+            "correo": "ext@correo.com",
+            "tipo": "externo",
+            "registrado_por": str(seed.ana),
+            "cantidad_tablas": 2,
+        },
     )
     assert resp.status_code == 201, resp.json
     assert resp.json["participante"]["seriales"][0] == primera

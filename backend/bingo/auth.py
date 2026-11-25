@@ -24,7 +24,7 @@ import logging
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from typing import Any, TypeVar, cast
 
@@ -41,7 +41,9 @@ from .services.students import StudentService
 
 logger = logging.getLogger(__name__)
 
-ADMIN, ANIMADOR, ESTUDIANTE = "admin", "animador", "estudiante"
+ADMIN, ANIMADOR, ESTUDIANTE, EXTERNO = "admin", "animador", "estudiante", "externo"
+# Sesión del público externo (cédula + correo + código): corta y de solo lectura.
+EXTERNO_HOURS = 2
 _SALT = "bingo-session"
 _VERIFIER_KEY = "google_verifier"
 _SERIALIZER_KEY = "session_serializer"
@@ -49,8 +51,10 @@ _REGISTRATION_KEY = "registration_serializer"
 REGISTRATION_MINUTES = 30
 
 # Endpoints de /api accesibles sin sesión.
-PUBLIC_ENDPOINTS = frozenset({"auth.google_login", "auth.auth_config", "auth.registro", "consulta.consulta_cedula"})
-# Únicos endpoints permitidos al rol estudiante.
+PUBLIC_ENDPOINTS = frozenset(
+    {"auth.google_login", "auth.auth_config", "auth.registro", "auth.externo_codigo", "auth.externo_verificar"}
+)
+# Únicos endpoints permitidos a estudiantes y al público externo: ver sus propias tablas.
 STUDENT_ENDPOINTS = frozenset({"auth.me", "consulta.mis_tablas"})
 # Campos con los que el cliente indica "quién" hace la operación.
 _ACTOR_FIELDS = ("usuario_id", "requesting_user_id", "registrado_por")
@@ -80,6 +84,8 @@ class Identity:
     # Rol del vendedor (animador, secretaria, financiero, parroquia, oratorio) o ``admin``.
     # ``rol`` es el grupo de permisos; los vendedores comparten los del animador.
     cargo: str = ""
+    # Comprador externo: cédula de su compra.
+    cedula: str = ""
 
     @property
     def user_id(self) -> str | None:
@@ -162,7 +168,7 @@ def _staff_identity(cols: Collections, settings: Settings, email: str) -> Identi
     svc = AnimatorService(cols, settings.staff_domain)
     animator = svc.by_email(email)
     user = svc.linked_user(animator) if animator else None
-    if not user or animator is None:
+    if not user or animator is None or animator.get("activo") is False:
         return None
     if is_admin(user):
         return Identity(ADMIN, email, user=user, cargo=ADMIN_ROL)
@@ -183,6 +189,7 @@ def verify_google_credential(credential: Any) -> str:
         logger.info("Token de Google rechazado: %s", exc)
         raise Unauthorized("No se pudo validar la cuenta de Google.") from exc
     email = normalize_email(claims.get("email"))
+    g.google_name = " ".join(str(claims.get("name") or "").split())
     # ``hd`` solo lo incluyen las cuentas de Google Workspace: evita cuentas
     # personales de Google creadas con un correo del dominio.
     allowed_hd = set(settings.student_domains)
@@ -207,7 +214,10 @@ def read_registration_token(token: Any) -> str:
 
 
 def issue_token(identity: Identity) -> str:
-    return _serializer().dumps({"email": identity.email, "rol": identity.rol})
+    data = {"email": identity.email, "rol": identity.rol}
+    if identity.rol == EXTERNO:
+        data["cedula"] = identity.cedula
+    return _serializer().dumps(data)
 
 
 def _identity_from_request() -> Identity:
@@ -221,16 +231,28 @@ def _identity_from_request() -> Identity:
 def identity_from_token(token: str) -> Identity:
     """Identidad de un token de sesión del panel (firma, caducidad y acceso vigente)."""
     try:
-        data = _serializer().loads(token, max_age=_settings().session_hours * 3600)
+        data, emitido = _serializer().loads(token, max_age=_settings().session_hours * 3600, return_timestamp=True)
     except SignatureExpired as exc:
         raise Unauthorized() from exc
     except BadSignature as exc:
         raise Unauthorized() from exc
+    if data.get("rol") == EXTERNO:
+        return _external_identity(data, emitido)
     try:
         identity = resolve_identity(get_db(), _settings(), str(data.get("email", "")))
     except Forbidden as exc:
         raise Unauthorized("Su acceso fue revocado.") from exc
     return identity
+
+
+def _external_identity(data: dict[str, Any], emitido: datetime) -> Identity:
+    """Sesión del comprador externo: vale 2 horas y mientras siga existiendo su compra."""
+    if datetime.now(UTC) - emitido > timedelta(hours=EXTERNO_HOURS):
+        raise Unauthorized()
+    email, cedula = str(data.get("email", "")), str(data.get("cedula", ""))
+    if not get_db().participants.find_one({"cedula": cedula, "correo": email}, {"_id": 1}):
+        raise Unauthorized("Ya no hay tablas registradas con esos datos.")
+    return Identity(EXTERNO, email, cedula=cedula)
 
 
 def current_identity() -> Identity:
@@ -256,7 +278,7 @@ def _guard() -> None:
         return
     identity = _identity_from_request()
     g.identity = identity
-    if identity.rol == ESTUDIANTE:
+    if identity.rol in (ESTUDIANTE, EXTERNO):
         if request.endpoint not in STUDENT_ENDPOINTS:
             raise Forbidden("Esta sección no está disponible para estudiantes.")
         return

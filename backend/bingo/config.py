@@ -75,6 +75,16 @@ class Settings:
     # personal); ``student_domain`` se acepta además por compatibilidad.
     staff_domain: str = "uets.edu.ec"
     student_domain: str = "est.uets.edu.ec"
+    # --- Correo saliente (tablas al comprador). La contraseña va solo en el .env del servidor. ---
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    mail_from: str = ""
+    # Dirección del panel que se indica en el correo para ver las tablas en línea.
+    panel_url: str = "https://consultas.uets.edu.ec"
+    # False en los tests: el correo se envía en la misma petición.
+    mail_async: bool = True
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -101,6 +111,13 @@ class Settings:
             admin_usuario=os.environ.get("BINGO_ADMIN_USUARIO", cls.admin_usuario),
             staff_domain=os.environ.get("BINGO_STAFF_DOMAIN", cls.staff_domain),
             student_domain=os.environ.get("BINGO_STUDENT_DOMAIN", cls.student_domain),
+            smtp_host=os.environ.get("SMTP_HOST", cls.smtp_host),
+            smtp_port=_env_int("SMTP_PORT", cls.smtp_port),
+            smtp_user=os.environ.get("SMTP_USER", cls.smtp_user),
+            smtp_pass=os.environ.get("SMTP_PASS", cls.smtp_pass),
+            mail_from=os.environ.get("MAIL_FROM", cls.mail_from),
+            panel_url=os.environ.get("PANEL_URL", cls.panel_url),
+            mail_async=_env_bool("BINGO_MAIL_ASYNC", cls.mail_async),
         )
 
     @property

@@ -8,6 +8,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { errorMessage } from '../core/http';
 import { ImportarEstudiantes } from './importar-estudiantes';
+import { ImportarAnimadores } from './importar-animadores';
 import { NuevoJuego } from './nuevo-juego';
 
 interface Resumen {
@@ -27,10 +28,12 @@ interface Resultado {
 
 @Component({
   selector: 'app-mantenimiento',
-  imports: [LucideAngularModule, ImportarEstudiantes, NuevoJuego],
+  imports: [LucideAngularModule, ImportarEstudiantes, ImportarAnimadores, NuevoJuego],
   template: `
     <div class="p-6 max-w-3xl mx-auto space-y-6">
       <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Mantenimiento</h1>
+
+      <app-importar-animadores />
 
       <app-importar-estudiantes />
 

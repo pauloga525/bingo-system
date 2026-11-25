@@ -2,8 +2,8 @@
 import { Injectable, computed, signal } from '@angular/core';
 
 /** Grupo de permisos: los vendedores (secretaría, financiero, ...) usan los de 'animador'. */
-export type Rol = 'admin' | 'animador' | 'estudiante';
-export const ROLES: readonly Rol[] = ['admin', 'animador', 'estudiante'];
+export type Rol = 'admin' | 'animador' | 'estudiante' | 'externo';
+export const ROLES: readonly Rol[] = ['admin', 'animador', 'estudiante', 'externo'];
 
 /** Rol del vendedor dentro del panel. Solo 'animador' tiene curso y vende a alumnos. */
 export type Cargo = 'admin' | 'animador' | 'secretaria' | 'financiero' | 'parroquia' | 'oratorio';
@@ -23,6 +23,9 @@ export interface Usuario {
   cargo_nombre?: string;
   /** true para secretaría, financiero, parroquia y oratorio. */
   solo_externos?: boolean;
+  /** Primer ingreso de un vendedor: debe confirmar su nombre. */
+  onboarding_pendiente?: boolean;
+  nombre_google?: string;
   correo?: string;
   usuario?: string;
   nombres?: string;
@@ -52,7 +55,7 @@ const readUser = (): Usuario | null => {
 
 /** Ruta de inicio según el rol. */
 export const homeFor = (usuario: Usuario | null): string =>
-  usuario?.rol === 'estudiante' ? '/mis-tablas' : '/admin';
+  usuario?.rol === 'estudiante' || usuario?.rol === 'externo' ? '/mis-tablas' : '/admin';
 
 @Injectable({ providedIn: 'root' })
 export class SessionService {
@@ -63,7 +66,7 @@ export class SessionService {
   /** Rol del vendedor; las sesiones anteriores a los roles nuevos son animadores. */
   readonly cargo = computed<Cargo | null>(() => {
     const u = this._user();
-    if (!u || u.rol === 'estudiante') return null;
+    if (!u || u.rol === 'estudiante' || u.rol === 'externo') return null;
     return u.cargo || (u.rol === 'admin' ? 'admin' : 'animador');
   });
   readonly soloExternos = computed(() => !!this._user()?.solo_externos);
@@ -78,6 +81,12 @@ export class SessionService {
 
   save({ token, usuario }: SesionResponse): void {
     localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, JSON.stringify(usuario));
+    this._user.set(usuario);
+  }
+
+  /** Actualiza el perfil guardado (p. ej. tras completar el primer ingreso) sin tocar el token. */
+  updateUser(usuario: Usuario): void {
     localStorage.setItem(USER_KEY, JSON.stringify(usuario));
     this._user.set(usuario);
   }

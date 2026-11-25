@@ -11,6 +11,9 @@ Invariantes que este servicio mantiene en todos los flujos:
 - Los vendedores con rol distinto de animador (secretaría, financiero,
   parroquia, oratorio) solo registran participantes de tipo ``externo``.
   ``rol_vendedor`` guarda el rol de quien vendió (lo usan los reportes).
+- Toda venta lleva el **correo** del comprador (obligatorio): ahí se le envían
+  sus tablas. Si es alumno debe ser su correo institucional y se guarda también
+  en su ficha de ``Estudiantes`` (con él inicia sesión y ve sus tablas).
 - Las tablas se venden **en cola** (``services/queue.py``): cada venta toma
   las siguientes tablas libres en orden de serial. No hay rangos ni cupos por
   vendedor. Solo el administrador puede elegir seriales específicos.
@@ -22,10 +25,12 @@ algo falla, se liberan las tablas ya tomadas (compensación).
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 
 from ..db import Collections, Doc
 from ..domain.pricing import calcular_total
@@ -36,6 +41,8 @@ from .queue import TableQueue
 
 ADMIN = 0
 _NOT_ASSIGNED = {"$ne": True}
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+ALUMNO = "alumno"
 
 
 def is_admin(user: Doc) -> bool:
@@ -66,8 +73,10 @@ def _partition_refs(refs: list[Any]) -> tuple[list[ObjectId], list[str]]:
 
 
 class ParticipantService:
-    def __init__(self, cols: Collections) -> None:
+    def __init__(self, cols: Collections, student_email: re.Pattern[str] | None = None) -> None:
         self.cols = cols
+        # Formato del correo estudiantil (``Settings.student_email_regex``); None = no se valida.
+        self.student_email = student_email
 
     # ------------------------------------------------------------- lectura
     def get_user(self, user_id: ObjectId, message: str = "Usuario no encontrado.") -> Doc:
@@ -148,8 +157,8 @@ class ParticipantService:
                 {"$set": {"stateAsigned": True, "assignedToParticipant": participant_id}},
             )
             if result.modified_count != 1:
-                self.release_tables(claimed)
-                raise ApiError("Una o más tablas ya están asignadas.")
+                TableQueue(self.cols).give_back(claimed, participant_id)
+                raise Conflict("Una o más tablas ya están asignadas.", tabla_ocupada=True)
             claimed.append(tid)
 
     def release_tables(self, table_ids: list[ObjectId]) -> None:
@@ -167,14 +176,18 @@ class ParticipantService:
 
     def _ensure_cedula_free(self, cedula: str) -> None:
         existente = self.cols.participants.find_one({"cedula": cedula}, {"registrado_por": 1})
-        if not existente:
-            return
+        if existente:
+            raise self._cedula_taken(cedula, existente)
+
+    def _cedula_taken(self, cedula: str, existente: Doc | None) -> Conflict:
         animador = "desconocido"
-        if existente.get("registrado_por"):
+        if existente and existente.get("registrado_por"):
             reg = self.cols.users.find_one({"_id": existente["registrado_por"]}, {"nombres_completos": 1})
             if reg and reg.get("nombres_completos"):
                 animador = reg["nombres_completos"]
-        raise Conflict(f"El participante con cédula {cedula} ya fue registrado por {animador}.")
+        return Conflict(
+            f"El participante con cédula {cedula} ya fue registrado por {animador}.", cedula_registrada=True
+        )
 
     @staticmethod
     def _sale_type(seller: Doc, tipo: Any, default: str = "alumno") -> tuple[str, str]:
@@ -184,6 +197,46 @@ class ParticipantService:
         if solo_externos(rol) and valor != EXTERNO:
             raise Forbidden(f"El rol {ETIQUETAS[rol]} solo puede vender tablas a participantes externos.")
         return valor, rol
+
+    # ------------------------------------------------------------- correo
+    def clean_sale_email(self, raw: Any, tipo: str, cedula: str) -> str:
+        """Correo del comprador validado. Alumno: institucional y no usado por otro estudiante."""
+        correo = str(raw or "").strip().lower()
+        if not correo:
+            raise ApiError("El correo es obligatorio: ahí se envían las tablas.")
+        if not _EMAIL.match(correo):
+            raise ApiError(f"El correo {correo} no es válido.")
+        if tipo != ALUMNO:
+            return correo
+        if self.student_email is not None and not self.student_email.match(correo):
+            raise ApiError("El correo del alumno debe ser el institucional (nombre.apellido.est@uets.edu.ec).")
+        if not self.cols.students.find_one({"Num documento": cedula}, {"_id": 1}):
+            raise ApiError(f"La cédula {cedula} no está en la lista de estudiantes; regístrelo como externo.")
+        otro = self.cols.students.find_one({"correo": correo, "Num documento": {"$ne": cedula}}, {"Nombre": 1})
+        if otro:
+            raise Conflict(f"El correo {correo} ya pertenece a otro estudiante.", correo_ocupado=True)
+        return correo
+
+    def save_student_email(self, tipo: str, cedula: str, correo: str) -> None:
+        """Guarda (o corrige) el correo en la ficha del estudiante para que pueda iniciar sesión."""
+        if tipo == ALUMNO:
+            self.cols.students.update_one({"Num documento": cedula}, {"$set": {"correo": correo}})
+
+    def change_email(self, participant_id: ObjectId, correo: Any, usuario_id: Any) -> Doc:
+        """Corrige el correo de un participante (y del estudiante si es alumno).
+
+        Con ``correo`` vacío solo valida el permiso (para reenviar al mismo correo).
+        """
+        participante = self.get_participant(participant_id)
+        self._authorize(usuario_id, participante, "modificar")
+        if not correo:
+            return participante
+        tipo = str(participante.get("tipo") or "")
+        cedula = str(participante.get("cedula") or "")
+        nuevo = self.clean_sale_email(correo, tipo, cedula)
+        self.cols.participants.update_one({"_id": participant_id}, {"$set": {"correo": nuevo}})
+        self.save_student_email(tipo, cedula, nuevo)
+        return {**participante, "correo": nuevo}
 
     # ----------------------------------------------------------- registro
     def _take_tables(self, allow_serials: bool, refs: Any, cantidad: Any, participant_id: ObjectId) -> list[ObjectId]:
@@ -199,7 +252,7 @@ class ParticipantService:
         n = safe_int(cantidad, 0)
         if n <= 0:
             raise ApiError("Indique cuántas tablas vende (cantidad mayor a 0).")
-        return TableQueue(self.cols).take(n, participant_id, self.claim_tables)
+        return TableQueue(self.cols).take(n, participant_id)
 
     def register(self, data: dict[str, Any], allow_serials: bool = False) -> Doc:
         """Registra un participante con ``cantidad_tablas`` tomadas de la cola.
@@ -225,6 +278,7 @@ class ParticipantService:
         refs = data.get("tablas") or []
         if not refs and safe_int(data.get("cantidad_tablas"), 0) <= 0:
             raise ApiError("Debe asignarse al menos una tabla al participante.")
+        correo = self.clean_sale_email(data.get("correo"), tipo, cedula)
         self._ensure_cedula_free(cedula)
 
         participant_id = ObjectId()
@@ -235,6 +289,7 @@ class ParticipantService:
             "nombre": nombre,
             "apellido": data.get("apellido", ""),
             "cedula": cedula,
+            "correo": correo,
             "celular": data.get("celular", ""),
             "telefono": data.get("telefono", data.get("celular", "")),
             "tipo": tipo,
@@ -250,10 +305,17 @@ class ParticipantService:
         }
         try:
             self.cols.participants.insert_one(doc)
+        except DuplicateKeyError as exc:
+            # Dos registros simultáneos de la misma cédula (doble clic o dos vendedores):
+            # el índice único deja pasar solo uno; las tablas del otro vuelven a la cola.
+            TableQueue(self.cols).give_back(table_ids, participant_id)
+            existente = self.cols.participants.find_one({"cedula": cedula}, {"registrado_por": 1})
+            raise self._cedula_taken(cedula, existente) from exc
         except Exception:
-            self.release_tables(table_ids)
+            TableQueue(self.cols).give_back(table_ids, participant_id)
             raise
         self._update_seller(seller_id, len(table_ids), total_pagar)
+        self.save_student_email(tipo, cedula, correo)
         return {
             **doc,
             "_id": str(participant_id),

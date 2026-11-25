@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -31,6 +32,10 @@ class Collections:
     participants: Collection[Doc]
     users: Collection[Doc]
     animators: Collection[Doc]
+    # Códigos de acceso del público externo (vencen solos con un índice TTL).
+    codes: Collection[Doc]
+    # Correos que intentaron entrar al panel sin estar autorizados.
+    access_log: Collection[Doc]
 
     @classmethod
     def from_client(cls, client: MongoClient[Doc], db_name: str) -> Collections:
@@ -45,6 +50,8 @@ class Collections:
             participants=db["Participantes"],
             users=db["Users"],
             animators=db["Animadores"],
+            codes=db["CodigosAcceso"],
+            access_log=db["IntentosAcceso"],
         )
 
 
@@ -61,12 +68,13 @@ def get_db() -> Collections:
     return cols
 
 
-# (colección, campos, opciones). ``cedula`` NO es único porque existen datos
-# históricos duplicados; la unicidad se valida en el servicio.
+# (colección, campos, opciones). La cédula del participante es única (ver
+# ``_ensure_unique_cedula``): así dos registros simultáneos no la duplican.
 _INDEXES: tuple[tuple[str, list[tuple[str, int]], dict[str, Any]], ...] = (
     ("tables", [("serial", ASCENDING)], {"unique": True, "name": "serial_unique"}),
     ("tables", [("stateAsigned", ASCENDING)], {"name": "stateAsigned"}),
-    ("participants", [("cedula", ASCENDING)], {"name": "cedula"}),
+    # Cola de venta: primera tabla libre por serial (services/queue.py).
+    ("tables", [("stateAsigned", ASCENDING), ("serial", ASCENDING)], {"name": "cola_venta"}),
     ("participants", [("registrado_por", ASCENDING)], {"name": "registrado_por"}),
     ("participants", [("tablas", ASCENDING)], {"name": "tablas"}),
     ("users", [("usuario", ASCENDING)], {"name": "usuario"}),
@@ -80,11 +88,34 @@ _INDEXES: tuple[tuple[str, list[tuple[str, int]], dict[str, Any]], ...] = (
     ("students", [("correo", ASCENDING)], {"name": "correo"}),
     ("students", [("Num documento", ASCENDING)], {"name": "num_documento"}),
     ("winners", [("serial", ASCENDING)], {"unique": True, "name": "serial_unique"}),
+    ("codes", [("expira", ASCENDING)], {"expireAfterSeconds": 0, "name": "vence"}),
+    ("codes", [("cedula", ASCENDING), ("correo", ASCENDING)], {"name": "cedula_correo"}),
+    ("access_log", [("correo", ASCENDING)], {"unique": True, "name": "correo"}),
 )
+
+
+def _ensure_unique_cedula(cols: Collections) -> None:
+    """Índice único ``Participantes.cedula``.
+
+    Reemplaza el índice antiguo no único. Si la base tiene cédulas repetidas (datos
+    históricos) no se puede crear: se deja el índice normal y se registra un aviso; la
+    unicidad la sigue validando el servicio.
+    """
+    collection: Collection[Doc] = cols.participants
+    try:
+        actuales = collection.index_information()
+        if "cedula" in actuales and not actuales["cedula"].get("unique"):
+            collection.drop_index("cedula")
+        collection.create_index([("cedula", ASCENDING)], unique=True, name="cedula")
+    except PyMongoError as exc:
+        logger.warning("Cédulas repetidas en Participantes: no se pudo crear el índice único (%s)", exc)
+        with contextlib.suppress(PyMongoError):
+            collection.create_index([("cedula", ASCENDING)], name="cedula")
 
 
 def ensure_indexes(cols: Collections) -> None:
     """Crea los índices necesarios. Si alguno falla solo se registra un aviso."""
+    _ensure_unique_cedula(cols)
     for attr, keys, options in _INDEXES:
         collection: Collection[Doc] = getattr(cols, attr)
         try:

@@ -14,14 +14,14 @@ export const routes: Routes = [
   },
   { path: '', pathMatch: 'full', redirectTo: 'login' },
 
-  // Páginas públicas (/buscar era la consulta anterior; conserva ?cedula=)
-  { path: 'consulta', loadComponent: () => import('./pages/consulta').then((m) => m.Consulta) },
-  { path: 'buscar', redirectTo: 'consulta' },
+  // La consulta libre por cédula se eliminó: el público entra por el login ("Público general").
+  { path: 'consulta', redirectTo: 'login' },
+  { path: 'buscar', redirectTo: 'login' },
 
-  // Estudiantes: solo sus tablas
+  // Estudiantes y compradores externos: solo sus tablas
   {
     path: 'mis-tablas',
-    canActivate: [roleGuard(['estudiante'])],
+    canActivate: [roleGuard(['estudiante', 'externo'])],
     loadComponent: () => import('./pages/mis-tablas').then((m) => m.MisTablas),
   },
 

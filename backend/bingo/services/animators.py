@@ -21,6 +21,7 @@ Esos roles no tienen curso y solo venden a externos. Sin ``rol`` = animador.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from bson import ObjectId
@@ -117,6 +118,13 @@ def _sales(user: Doc | None) -> dict[str, int]:
     }
 
 
+def access_state(doc: Doc) -> str:
+    """``sin_acceso``, ``pendiente`` (tiene correo pero no ha completado su primer ingreso) o ``activo``."""
+    if not doc.get("correo") or doc.get("activo") is False:
+        return "sin_acceso"
+    return "activo" if doc.get("onboarding_at") else "pendiente"
+
+
 def animator_name(doc: Doc) -> str:
     return str(doc.get("profesor") or doc.get("tutor") or "").strip()
 
@@ -179,8 +187,14 @@ class AnimatorService:
         return {
             "_id": str(doc["_id"]),
             "nombre": animator_name(doc),
+            "nombre_pendiente": bool(doc.get("nombre_pendiente")),
             "rol": rol,
             "rol_nombre": ETIQUETAS[rol],
+            "activo": doc.get("activo", True) is not False,
+            # sin_acceso (sin correo o desactivado) | pendiente (aún no entra) | activo
+            "estado": access_state(doc),
+            "primer_ingreso": doc.get("onboarding_at"),
+            "ultimo_ingreso": doc.get("ultimo_ingreso"),
             **(course or dict.fromkeys(COURSE_FIELDS, "")),
             "curso_asignado": course is not None,
             "correo": doc.get("correo", ""),
@@ -258,6 +272,8 @@ class AnimatorService:
             fields["correo"] = validate_domain_email(data.get("correo"), self.staff_domain)
         if "rol" in data or not partial:
             fields["rol"] = clean_rol(data.get("rol"))
+        if "activo" in data:
+            fields["activo"] = None if data.get("activo") in (True, "true", 1, "1", None) else False
         rol = fields.get("rol", current_rol)
         if rol != ANIMADOR_ROL:
             if clean_course(data) is not None and any(k in data for k in COURSE_FIELDS):
@@ -320,6 +336,55 @@ class AnimatorService:
         ).inserted_id
         return user_id
 
+    def _forget_rejected(self, email: str | None) -> None:
+        if email:
+            self.cols.access_log.delete_one({"correo": email})
+
+    def create_batch(self, correos: Any, rol: Any) -> dict[str, Any]:
+        """Crea vendedores solo con su correo (p. ej. los de financiero). El nombre se completa
+        en su primer ingreso con el de su cuenta de Google."""
+        rol_ok = clean_rol(rol)
+        lista = [normalize_email(c) for c in re.split(r"[\s,;]+", str(correos or "")) if c.strip()]
+        if not lista:
+            raise ApiError("Escriba al menos un correo.")
+        creados: list[str] = []
+        existentes: list[str] = []
+        invalidos: list[str] = []
+        for correo in dict.fromkeys(lista):
+            try:
+                validate_domain_email(correo, self.staff_domain, required=True)
+            except ApiError:
+                invalidos.append(correo)
+                continue
+            if self.cols.animators.find_one({"correo": correo}, {"_id": 1}):
+                existentes.append(correo)
+                continue
+            self.create({"nombre": correo.split("@")[0], "correo": correo, "rol": rol_ok})
+            self.cols.animators.update_one({"correo": correo}, {"$set": {"nombre_pendiente": True}})
+            creados.append(correo)
+        return {"creados": creados, "existentes": existentes, "invalidos": invalidos}
+
+    def complete_onboarding(self, email: str, nombre: Any) -> Doc:
+        """Primer ingreso: confirma (o corrige) el nombre y marca la cuenta como activa."""
+        doc = self.by_email(email)
+        if doc is None:
+            raise NotFound("No hay un vendedor con este correo.")
+        self.update(doc["_id"], {"nombre": nombre})
+        self.cols.animators.update_one(
+            {"_id": doc["_id"]},
+            {
+                "$set": {"onboarding_at": datetime.now().isoformat(timespec="seconds")},
+                "$unset": {"nombre_pendiente": ""},
+            },
+        )
+        return self.get(doc["_id"])
+
+    def record_login(self, email: str, google_name: str) -> None:
+        self.cols.animators.update_one(
+            {"correo": normalize_email(email)},
+            {"$set": {"ultimo_ingreso": datetime.now().isoformat(timespec="seconds"), "nombre_google": google_name}},
+        )
+
     def create(self, data: dict[str, Any], reassign: bool = False) -> dict[str, Any]:
         fields = self._clean(data, partial=False)
         self._ensure_email_free(fields.get("correo"))
@@ -329,6 +394,7 @@ class AnimatorService:
         user_id = self._create_user(nombre, course, fields["rol"])
         doc: Doc = {"profesor": nombre, "usuario_id": user_id}
         doc.update({k: v for k, v in fields.items() if v not in (None, "")})
+        self._forget_rejected(fields.get("correo"))
         try:
             doc["_id"] = self.cols.animators.insert_one(doc).inserted_id
         except DuplicateKeyError as exc:  # otro administrador tomó el curso al mismo tiempo
@@ -343,6 +409,7 @@ class AnimatorService:
             data = {**{k: doc.get(k) for k in COURSE_FIELDS}, **data}
         fields = self._clean(data, partial=True, current_rol=rol_de(doc))
         self._ensure_email_free(fields.get("correo"), exclude=doc["_id"])
+        self._forget_rejected(fields.get("correo"))
         self._claim_course(fields, doc["_id"], reassign)
 
         changes: dict[str, Any] = {k: v for k, v in fields.items() if k != "nombre"}

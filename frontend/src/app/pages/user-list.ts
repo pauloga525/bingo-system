@@ -16,6 +16,12 @@ export interface Participante {
   nivelCurso?: string;
   paralelo?: string;
   tablas?: unknown[];
+  tipo?: string;
+  correo?: string;
+  /** pendiente | enviado | error | sin_configurar */
+  correo_estado?: string;
+  correo_enviado_at?: string;
+  correo_error?: string;
 }
 
 interface UsuarioDoc {

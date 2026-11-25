@@ -11,7 +11,7 @@ from .conftest import Seed, login_as, register
 def test_queue_preview_validations(client: FlaskClient, seed: Seed) -> None:
     assert client.post("/api/obtenerTablasConsecutivas", json={"cantidad_tablas": 0}).status_code == 400
     resp = client.post("/api/obtenerTablasConsecutivas", json={"cantidad_tablas": 21})
-    assert resp.status_code == 400 and resp.json["message"] == "Solo quedan 20 tablas disponibles."
+    assert resp.status_code == 409 and resp.json["message"] == "Solo quedan 20 tablas disponibles."
 
 
 def test_validar_tablas_get_is_read_only_and_post_fixes(client: FlaskClient, cols: Collections, seed: Seed) -> None:

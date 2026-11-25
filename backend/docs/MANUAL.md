@@ -130,22 +130,41 @@ sesión del tablero; la sesión también vence a las horas de `BINGO_SESSION_HOU
 
 ## 5. Ingresar al panel (quién entra y cómo)
 
-Todos entran en el panel con **"Iniciar sesión con Google"** usando su cuenta `@uets.edu.ec`.
+La pantalla de inicio tiene dos opciones:
+- **Estudiante / personal UETS** → **"Iniciar sesión con Google"** con la cuenta `@uets.edu.ec`.
+- **Público general** → cédula + correo de la compra → código de 6 dígitos al correo (ver 5.4).
 
 | Quién | Cómo obtiene acceso | Qué ve |
 | --- | --- | --- |
 | **Administrador** | `admin@uets.edu.ec` (variable `BINGO_ADMIN_EMAILS`) | Todo: participantes, tablas, reportes, **Vendedores**, **Estudiantes**, mantenimiento |
-| **Animador** | El administrador le pone su correo en **Animadores** | Sus participantes (vende tablas de la cola) y **Mi curso** (los alumnos de su paralelo) |
+| **Animador** | Está en la **lista oficial del DECE** (5.1) o el admin le pone su correo en **Vendedores** | Sus participantes (vende tablas de la cola) y **Mi curso** (los alumnos de su paralelo) |
+| **Secretaría, Financiero, Parroquia, Oratorio** | El admin los crea en **Vendedores** (uno a uno o varios por correo) | Sus participantes (solo externos) |
 | **Estudiante** | Se registra solo la primera vez (ver abajo) | Únicamente **Mis tablas** (con descarga en PDF) |
-| **Comprador externo** | No necesita cuenta | Página pública **`/consulta`**: escribe su cédula y ve/descarga sus tablas |
+| **Comprador externo** | No necesita cuenta | **Público general**: cédula + correo + código → ve/descarga **solo sus** tablas |
 
-### 5.1 Dar acceso a un animador (administrador)
-1. Panel → **Animadores** → botón **Editar** (lápiz) del animador.
-2. Escriba su **correo institucional** y guarde. Desde ese momento puede entrar con Google.
-3. Para quitarle el acceso, borre el correo y guarde.
-4. **Nuevo animador** crea el animador y su cuenta de ventas a la vez.
-5. **Eliminar** (papelera) borra al animador, salvo que ya tenga participantes registrados; en ese
-   caso quítele el correo.
+### 5.1 Quién puede entrar como vendedor (administrador)
+**Solo entran los correos registrados en Vendedores.** Cualquier otro correo del personal recibe
+"sin acceso" y su intento aparece arriba en **Vendedores → "Intentaron entrar sin estar autorizados"**,
+con los botones **Habilitar** (abre el formulario con ese correo) y **Descartar**.
+
+**Lista oficial de animadores (DECE).** Panel → **Mantenimiento → Lista oficial de animadores** (o
+**Vendedores → Importar lista DECE**). Suba el PDF *"Docentes animadores de curso"* del DECE (o un Excel
+con las columnas Docente, Correo, Nivel, Curso, Especialidad, Paralelo). La vista previa muestra
+nuevos, cambios de correo/curso, quiénes **pierden el acceso** (animadores que no están en la lista) y
+filas con problemas. Para aplicar escriba **`IMPORTAR ANIMADORES`**. Se guarda un respaldo en
+`backups\animadores_<fecha>.json`. Volver a subir la misma lista no cambia nada. Los demás roles
+(secretaría, financiero, …) no se tocan.
+
+**Varios por correo** (p. ej. Financiero): **Vendedores → Agregar varios por correo**, pegue los
+correos y elija el rol. El nombre lo confirma cada persona en su primer ingreso.
+
+**Primer ingreso.** La primera vez que un vendedor entra ve una pantalla de **bienvenida**: confirma
+su nombre (se propone el de su cuenta de Google cuando se creó solo con el correo) y ve su rol y
+curso. En **Vendedores**, la columna **Estado** muestra *Pendiente 1.er ingreso*, *Activo* (con la fecha
+del último ingreso) o *Sin acceso*.
+
+**Quitar o devolver el acceso:** el botón de encendido (⏻) **desactiva/reactiva** sin borrar nada.
+**Eliminar** (papelera) solo funciona si no tiene participantes registrados.
 
 ### 5.1.1 Asignar o reasignar el curso de un animador (administrador)
 **Regla:** cada curso (paralelo) tiene **un solo animador**, y cada animador **un solo curso**. El curso
@@ -203,6 +222,23 @@ Cómo se vende:
 4. Si se quita una tabla o se borra un participante, sus tablas **vuelven a la cola** y las toma la
    siguiente venta.
 
+**Correo obligatorio y envío de las tablas.** Toda venta pide el **correo** del comprador:
+- **Alumno:** al buscar su cédula se carga su correo institucional (`nombre.apellido.est@uets.edu.ec`).
+  Si está mal o falta, el vendedor lo corrige o lo agrega; al guardar queda en su ficha de estudiante y
+  con él entra al sistema (Google) y ve sus tablas. El alumno debe estar en la lista de estudiantes y el
+  correo no puede ser de otro estudiante.
+- **Externo y docente:** cualquier correo válido.
+
+Al terminar la venta (y al añadir cartones) el servidor envía en segundo plano un correo desde
+`noreply@uets.edu.ec` con los seriales, el total y el **PDF de las tablas**. En **Ver cartones** se ve el
+estado (enviado / falló / no configurado) y los botones **Reenviar tablas por correo** y **Cambiar
+correo**. Si el correo falla, la venta no se pierde.
+
+Configuración en el `.env` del servidor (la contraseña de aplicación **no** va en el repositorio):
+`SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, `SMTP_USER=noreply@uets.edu.ec`, `SMTP_PASS=…`,
+`MAIL_FROM=Sistema UETS <noreply@uets.edu.ec>` y `PANEL_URL=https://consultas.uets.edu.ec`.
+Google Workspace permite unos 2000 envíos por día por cuenta.
+
 En **Participantes** se ve cuántas tablas vendió cada uno, cuántas quedan en la cola y la próxima que
 se entregará. Solo el **administrador** puede asignar una tabla específica (por API, para corregir
 casos puntuales); la cola la salta.
@@ -217,8 +253,16 @@ casos puntuales); la cola la salta.
 
 Solo los correos estudiantiles pueden registrarse; un correo de docente sin rol recibe "sin acceso".
 
-### 5.4 Consulta pública
-`http://<dirección-del-panel>/consulta` (o `/consulta?cedula=0102030405`). No requiere cuenta.
+### 5.4 Público general (compradores externos)
+Ya **no** existe la consulta libre por cédula (dejaba ver las tablas de cualquiera). Ahora:
+1. En el login elija **Público general** y escriba la **cédula** y el **correo** que dio al comprar.
+2. Si coinciden con una compra, le llega un **código de 6 dígitos** desde `noreply@uets.edu.ec`
+   (la pantalla dice lo mismo exista o no la compra, para no revelar datos).
+3. Con el código ve y descarga **solo sus** tablas. La sesión dura 2 horas.
+
+Límites: el código vence en 10 minutos y admite 5 intentos; se puede pedir uno por minuto y hasta 5
+por hora. Si el comprador dio mal su correo, el vendedor lo corrige en **Ver cartones → Cambiar
+correo** (también le reenvía las tablas). `/consulta` ahora lleva al login.
 
 ### 5.5 Vaciar todos los participantes (administrador)
 Panel → **Mantenimiento** → *Vaciar todos los participantes*. Sirve, por ejemplo, para borrar

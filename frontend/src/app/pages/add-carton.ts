@@ -5,7 +5,7 @@ import { Router } from '@angular/router';
 import { ArrowLeft, LucideAngularModule, Save } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
-import { errorMessage } from '../core/http';
+import { errorMessage, isConflict } from '../core/http';
 import { SessionService } from '../core/session';
 import { calcularTotal, textoPromociones } from '../core/tablas';
 
@@ -121,6 +121,7 @@ export class AddCarton implements OnInit {
 
   protected async enviar(event: Event): Promise<void> {
     event.preventDefault();
+    if (this.loading()) return; // ignora clics repetidos mientras se guarda
     const cantidad = this.cantidad();
     if (cantidad <= 0) {
       alert('Indique cuántas tablas añadir');
@@ -136,13 +137,18 @@ export class AddCarton implements OnInit {
         ),
       );
       if (resp.success) {
-        alert(`Tablas agregadas: ${(resp.seriales || []).join(', ')}\nCobrar: $${this.total()}`);
+        alert(
+          `Tablas agregadas: ${(resp.seriales || []).join(', ')}\nCobrar: $${this.total()}\n` +
+            'Se envía por correo la lista actualizada de tablas.',
+        );
         this.volver();
       } else {
         alert(resp.message || 'Error al agregar tablas');
       }
     } catch (err) {
       alert(errorMessage(err, 'Error al agregar tablas'));
+      // 409: otra venta se llevó las tablas; se vuelve a leer lo que tiene el participante.
+      if (isConflict(err)) await this.ngOnInit();
     } finally {
       this.loading.set(false);
     }

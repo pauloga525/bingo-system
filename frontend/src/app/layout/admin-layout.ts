@@ -5,10 +5,11 @@ import { LogOut, LucideAngularModule, Monitor, User } from 'lucide-angular';
 
 import { API_BASE_URL } from '../core/config';
 import { SessionService } from '../core/session';
+import { Bienvenida } from '../shared/bienvenida';
 
 @Component({
   selector: 'app-admin-layout',
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, LucideAngularModule],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, LucideAngularModule, Bienvenida],
   template: `
     <div class="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
       <header
@@ -72,6 +73,9 @@ import { SessionService } from '../core/session';
           </button>
         </div>
       </header>
+      @if (session.user()?.onboarding_pendiente) {
+        <app-bienvenida />
+      }
       <main class="flex-1">
         <router-outlet />
       </main>
@@ -79,7 +83,7 @@ import { SessionService } from '../core/session';
   `,
 })
 export class AdminLayout {
-  private readonly session = inject(SessionService);
+  protected readonly session = inject(SessionService);
   private readonly router = inject(Router);
   protected readonly UserIcon = User;
   protected readonly LogOutIcon = LogOut;
