@@ -85,14 +85,16 @@ def test_pdf_download(jugado: FlaskClient) -> None:
     assert jugado.get(URL).json["pdf_actual"] == nombre
 
 
-def test_new_tables_can_be_reserved_and_sold(jugado: FlaskClient, cols: Collections, seed: Seed) -> None:
+def test_new_tables_are_sold_from_the_queue(jugado: FlaskClient, cols: Collections, seed: Seed) -> None:
     jugado.post(URL, json=OK)
+    login_as(jugado, "ana")
+    primera = jugado.get("/api/cola-tablas").json["siguiente"]
     resp = jugado.post(
-        f"/api/users/{seed.ana}/assign_tables", json={"totalTables": 5, "requesting_user_id": str(seed.admin)}
+        "/api/registrarParticipante",
+        json={"nombre": "N", "cedula": "0101", "registrado_por": str(seed.ana), "cantidad_tablas": 2},
     )
-    assert resp.status_code == 200, resp.json
-    desde = resp.json["from"]
-    assert register(jugado, seed.ana, "0101", [desde]).status_code == 201
+    assert resp.status_code == 201, resp.json
+    assert resp.json["participante"]["seriales"][0] == primera
 
 
 @pytest.mark.parametrize(

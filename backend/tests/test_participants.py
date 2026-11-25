@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+
+from bson import ObjectId
 from flask.testing import FlaskClient
 
 from bingo.db import Collections
@@ -32,10 +35,13 @@ def test_register_rejects_duplicate_cedula(client: FlaskClient, seed: Seed) -> N
     assert "Nombre ANA" in resp.json["message"]
 
 
-def test_register_rejects_out_of_range_table(client: FlaskClient, cols: Collections, seed: Seed) -> None:
-    resp = register(client, seed.ana, "0101", ["CARD00015"])
-    assert resp.status_code == 400
-    assert "fuera del rango" in resp.json["message"]
+def test_animator_cannot_choose_specific_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
+    resp = client.post(
+        "/api/registrarParticipante",
+        json={"nombre": "J", "cedula": "0101", "registrado_por": str(seed.ana), "tablas": ["CARD00015"]},
+    )
+    assert resp.status_code == 403
+    assert "cola" in resp.json["message"]
     assert cols.participants.count_documents({}) == 0
 
 
@@ -48,11 +54,56 @@ def test_register_rejects_already_assigned_and_rolls_back(client: FlaskClient, c
     assert _user(cols, seed.ana)["usedTables"] == 1
 
 
-def test_register_rejects_more_than_quota(client: FlaskClient, cols: Collections, seed: Seed) -> None:
-    cols.users.update_one({"_id": seed.ana}, {"$set": {"usedTables": 9}})
-    resp = register(client, seed.ana, "0101", ["CARD00001", "CARD00002"])
-    assert resp.status_code == 400
-    assert "Solo tienes 1" in resp.json["message"]
+def _vender(client: FlaskClient, seller: str, uid: ObjectId, cedula: str, cantidad: int) -> Any:
+    login_as(client, seller)
+    return client.post(
+        "/api/registrarParticipante",
+        json={"nombre": "J", "cedula": cedula, "registrado_por": str(uid), "cantidad_tablas": cantidad},
+    )
+
+
+def test_sales_take_consecutive_tables_from_the_queue(client: FlaskClient, cols: Collections, seed: Seed) -> None:
+    assert client.get("/api/cola-tablas").json == {
+        "success": True,
+        "total": 20,
+        "vendidas": 0,
+        "disponibles": 20,
+        "siguiente": "CARD00001",
+    }
+    vista = client.post("/api/obtenerTablasConsecutivas", json={"cantidad_tablas": 3}).json
+    assert vista["tablas_consecutivas"] == ["CARD00001", "CARD00002", "CARD00003"]
+
+    # ANA vende 4 -> 001..004; BETO vende 2 -> 005..006 (sin rangos por vendedor).
+    r1 = _vender(client, "ana", seed.ana, "01", 4)
+    assert r1.status_code == 201, r1.json
+    assert r1.json["participante"]["seriales"] == [f"CARD0000{i}" for i in range(1, 5)]
+    assert r1.json["participante"]["total_pagar"] == 10
+    r2 = _vender(client, "beto", seed.beto, "02", 2)
+    assert r2.json["participante"]["seriales"] == ["CARD00005", "CARD00006"]
+
+    # El admin puede asignar una tabla específica; la cola la salta.
+    login_as(client, "admin")
+    assert (
+        client.post(
+            "/api/registrarParticipante",
+            json={"nombre": "A", "cedula": "03", "registrado_por": str(seed.admin), "tablas": ["CARD00008"]},
+        ).status_code
+        == 201
+    )
+    r3 = _vender(client, "ana", seed.ana, "04", 2)
+    assert r3.json["participante"]["seriales"] == ["CARD00007", "CARD00009"]
+
+    # Si se libera una venta, sus tablas vuelven a la cola.
+    login_as(client, "beto")
+    pid = r2.json["participante"]["_id"]
+    assert client.delete(f"/api/participante/{pid}/1", json={"usuario_id": str(seed.beto)}).status_code == 200
+    assert client.get("/api/cola-tablas").json["siguiente"] == "CARD00005"
+
+    # No alcanzan las tablas: no se asigna nada.
+    r4 = _vender(client, "ana", seed.ana, "05", 50)
+    assert r4.status_code == 400 and "Solo quedan" in r4.json["message"]
+    assert cols.participants.count_documents({"cedula": "05"}) == 0
+    assert _user(cols, seed.ana)["usedTables"] == 6
 
 
 def test_register_validations(client: FlaskClient, seed: Seed) -> None:
@@ -83,8 +134,9 @@ def _participant_id(client: FlaskClient, seller: object, cedula: str, tablas: li
 
 def test_add_tables_recomputes_total_and_counters(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     pid = _participant_id(client, seed.ana, "0101", ["CARD00001", "CARD00002", "CARD00003", "CARD00004"])
-    resp = client.post(f"/api/participante/{pid}/tablas/1", json={"tablas": ["CARD00005"], "usuario_id": str(seed.ana)})
+    resp = client.post(f"/api/participante/{pid}/tablas/1", json={"cantidad": 1, "usuario_id": str(seed.ana)})
     assert resp.status_code == 200, resp.json
+    assert resp.json["seriales"] == ["CARD00005"]
     participante = cols.participants.find_one({})
     assert participante is not None
     assert len(participante["tablas"]) == 5
@@ -114,10 +166,10 @@ def test_admin_can_manage_any_participant(client: FlaskClient, seed: Seed) -> No
     assert resp.status_code == 200, resp.json
 
 
-def test_animator_cannot_add_tables_outside_range(client: FlaskClient, seed: Seed) -> None:
+def test_animator_cannot_add_specific_tables(client: FlaskClient, seed: Seed) -> None:
     pid = _participant_id(client, seed.ana, "0101", ["CARD00001"])
     resp = client.post(f"/api/participante/{pid}/tablas/1", json={"tablas": ["CARD00015"], "usuario_id": str(seed.ana)})
-    assert resp.status_code == 400
+    assert resp.status_code == 403
 
 
 def test_remove_table_updates_everything(client: FlaskClient, cols: Collections, seed: Seed) -> None:
@@ -197,3 +249,29 @@ def test_participant_by_cedula_and_pdf(client: FlaskClient, seed: Seed) -> None:
     pdf = client.get("/api/participante/cedula/0101/tablas_pdf")
     assert pdf.status_code == 200
     assert pdf.data.startswith(b"%PDF")
+
+
+def test_queue_retries_when_another_process_took_a_table(cols: Collections, seed: Seed) -> None:
+    from bingo.errors import ApiError
+    from bingo.services.queue import TableQueue
+
+    llamadas: list[list[ObjectId]] = []
+
+    def claim(ids: list[ObjectId], _pid: ObjectId) -> None:
+        llamadas.append(ids)
+        if len(llamadas) == 1:  # otro proceso tomó una tabla justo antes
+            cols.tables.update_one({"_id": ids[0]}, {"$set": {"stateAsigned": True}})
+            raise ApiError("Una o más tablas ya están asignadas.")
+
+    ids = TableQueue(cols).take(2, ObjectId(), claim)
+    assert len(llamadas) == 2 and ids == llamadas[1] and ids[0] != llamadas[0][0]
+
+    def siempre_falla(ids: list[ObjectId], _pid: ObjectId) -> None:
+        raise ApiError("Una o más tablas ya están asignadas.")
+
+    try:
+        TableQueue(cols).take(1, ObjectId(), siempre_falla)
+    except ApiError as exc:
+        assert "asignadas" in exc.message
+    else:  # pragma: no cover
+        raise AssertionError("debía fallar")

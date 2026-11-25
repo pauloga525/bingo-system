@@ -117,9 +117,6 @@ def test_delete_animator(admin: FlaskClient, cols: Collections, seed: Seed) -> N
     ana = cols.animators.find_one({"correo": "ana@uets.edu.ec"})
     assert ana is not None
     assert admin.delete(f"/api/animadores/{ana['_id']}").status_code == 409  # tiene participantes
-    beto = cols.animators.find_one({"correo": "beto@uets.edu.ec"})
-    assert beto is not None
-    assert admin.delete(f"/api/animadores/{beto['_id']}").status_code == 409  # tiene tablas reservadas
 
     nuevo: dict[str, Any] = admin.post("/api/animadores", json=NUEVO).json["animador"]
     assert admin.delete(f"/api/animadores/{nuevo['_id']}").status_code == 200
@@ -202,15 +199,8 @@ def test_student_email_in_staff_domain(admin: FlaskClient) -> None:
     assert admin.post("/api/estudiantes", json=body).json["estudiante"]["correo"] == "pepe.perezl.est@uets.edu.ec"
 
 
-def test_admin_reserves_tables_for_new_animator(admin: FlaskClient, seed: Seed) -> None:
+def test_new_animator_starts_without_sales(admin: FlaskClient, seed: Seed) -> None:
     nuevo = admin.post("/api/animadores", json=NUEVO).json["animador"]
-    assert nuevo["reserva"] is None
-    for i in range(21, 26):
-        admin.application.extensions["bingo_db"].tables.insert_one({"serial": f"CARD{i:05d}", "matrix": []})
-    resp = admin.post(
-        f"/api/users/{nuevo['usuario_id']}/assign_tables",
-        json={"totalTables": 3, "requesting_user_id": str(seed.admin)},
-    )
-    assert resp.status_code == 200, resp.json
-    reserva = admin.get(f"/api/animadores/{nuevo['_id']}").json["animador"]["reserva"]
-    assert reserva == {"total": 3, "usadas": 0, "desde": "CARD00025", "hasta": "CARD00023"}
+    assert nuevo["ventas"] == {"tablas": 0, "monto": 0}
+    # Ya no existen las reservas de tablas por vendedor.
+    assert admin.post(f"/api/users/{nuevo['usuario_id']}/assign_tables", json={}).status_code == 404

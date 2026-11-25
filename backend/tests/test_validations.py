@@ -28,7 +28,7 @@ def _participant(client: FlaskClient, seed: Seed, cedula: str = "0101", tablas: 
     ("tablas", "status"),
     [
         (["CARD00009"], 201),
-        (["CARD00099"], 400),  # fuera del rango de ANA
+        (["CARD00099"], 404),  # serial inexistente
         ([MISSING], 404),  # ObjectId inexistente
     ],
 )
@@ -48,11 +48,12 @@ def test_register_rejects_non_list_and_unknown_seller(client: FlaskClient, seed:
     assert register(client, ObjectId(), "0101", ["CARD00001"]).status_code == 404
 
 
-def test_register_without_quota_left(client: FlaskClient, cols: Collections, seed: Seed) -> None:
-    cols.users.update_one({"_id": seed.ana}, {"$set": {"usedTables": 10}})
-    resp = register(client, seed.ana, "0101", ["CARD00001"])
+def test_register_requires_quantity(client: FlaskClient, seed: Seed) -> None:
+    body = {"nombre": "J", "cedula": "0101", "registrado_por": str(seed.ana)}
+    resp = client.post("/api/registrarParticipante", json=body)
     assert resp.status_code == 400
-    assert resp.json["message"] == "Ya no tienes tablas disponibles."
+    assert resp.json["message"] == "Debe asignarse al menos una tabla al participante."
+    assert client.post("/api/registrarParticipante", json={**body, "tablas": "x"}).status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -62,7 +63,7 @@ def test_register_without_quota_left(client: FlaskClient, cols: Collections, see
         ({"nombre": "J", "cedula": "1", "registrado_por": "x", "cantidad_tablas": 0}, 400),
         ({"nombre": "J", "cedula": "1", "registrado_por": "x"}, 400),  # id inválido
         ({"nombre": "J", "cedula": "1", "registrado_por": MISSING}, 404),
-        ({"nombre": "J", "cedula": "1", "registrado_por": "SEED", "cantidad_tablas": 11}, 400),
+        ({"nombre": "J", "cedula": "1", "registrado_por": "SEED", "cantidad_tablas": 21}, 400),  # solo hay 20
     ],
 )
 def test_register_auto_validations(client: FlaskClient, seed: Seed, body: dict[str, Any], status: int) -> None:
@@ -72,17 +73,13 @@ def test_register_auto_validations(client: FlaskClient, seed: Seed, body: dict[s
     assert client.post("/api/registrarParticipanteAuto", json=body).status_code == status
 
 
-def test_register_auto_without_quota_or_free_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
+def test_register_auto_without_free_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     body = {"nombre": "J", "cedula": "1", "registrado_por": str(seed.ana), "cantidad_tablas": 2}
-    # Las tablas de la reserva están tomadas por fuera del contador: no alcanzan.
-    cols.tables.update_many({"_id": {"$in": list(seed.tables.values())}}, {"$set": {"stateAsigned": True}})
+    cols.tables.update_many({}, {"$set": {"stateAsigned": True}})
     resp = client.post("/api/registrarParticipanteAuto", json=body)
     assert resp.status_code == 400
-    assert resp.json["message"] == "Sólo quedan 0 tablas disponibles"
-
-    cols.users.update_one({"_id": seed.ana}, {"$set": {"usedTables": 10}})
-    resp = client.post("/api/registrarParticipanteAuto", json=body)
-    assert resp.json["message"] == "Ya no tienes tablas disponibles"
+    assert resp.json["message"] == "Solo quedan 0 tablas disponibles."
+    assert cols.participants.count_documents({}) == 0
 
 
 # ----------------------------------------------------------- modificaciones
@@ -98,12 +95,11 @@ def test_add_tables_validations(client: FlaskClient, seed: Seed) -> None:
     assert client.post(url, json={"usuario_id": MISSING, "tablas": ["CARD00002"]}).status_code == 404
 
 
-def test_add_tables_beyond_quota(client: FlaskClient, cols: Collections, seed: Seed) -> None:
+def test_add_tables_beyond_free_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     pid = _participant(client, seed)
-    cols.users.update_one({"_id": seed.ana}, {"$set": {"usedTables": 10}})
-    resp = client.post(f"/api/participante/{pid}/tablas/1", json={"usuario_id": str(seed.ana), "tablas": ["CARD00002"]})
+    resp = client.post(f"/api/participante/{pid}/tablas/1", json={"usuario_id": str(seed.ana), "cantidad": 30})
     assert resp.status_code == 400
-    assert "Solo tienes 0 disponibles" in resp.json["message"]
+    assert "Solo quedan" in resp.json["message"]
 
 
 def test_remove_table_validations(client: FlaskClient, seed: Seed) -> None:

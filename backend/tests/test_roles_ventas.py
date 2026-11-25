@@ -101,15 +101,6 @@ def test_cambiar_animador_a_otro_rol_quita_su_curso(admin: FlaskClient, cols: Co
 def test_perfil_y_venta_solo_externos(admin: FlaskClient, cols: Collections, seed: Seed) -> None:
     v = _crear_vendedor(admin, "oratorio", "orat@uets.edu.ec")
     uid = v["usuario_id"]
-    # Reserva de tablas para el vendedor nuevo (libera las de BETO primero).
-    cols.users.update_one({"_id": seed.beto}, {"$unset": {"totalTables": "", "reserved_table_ids": ""}})
-    assert (
-        admin.post(
-            f"/api/users/{uid}/assign_tables", json={"totalTables": 4, "requesting_user_id": str(seed.admin)}
-        ).status_code
-        == 200
-    )
-    reservadas = sorted(t["serial"] for t in cols.tables.find({"reservedTo": ObjectId(uid)}))
 
     login_as(admin, "orat@uets.edu.ec")
     perfil = admin.get("/api/auth/me").json["usuario"]
@@ -118,7 +109,7 @@ def test_perfil_y_venta_solo_externos(admin: FlaskClient, cols: Collections, see
     # Sin curso: Mi curso no aplica.
     assert admin.get("/api/mi-curso").status_code == 404
 
-    body = {"nombre": "Ext", "cedula": "0999999991", "registrado_por": uid, "tablas": reservadas[:2]}
+    body = {"nombre": "Ext", "cedula": "0999999991", "registrado_por": uid, "cantidad_tablas": 2}
     resp = admin.post("/api/registrarParticipante", json={**body, "tipo": "alumno"})
     assert resp.status_code == 403 and "externos" in resp.json["message"]
     resp = admin.post("/api/registrarParticipante", json={**body, "tipo": "externo"})
@@ -143,7 +134,7 @@ def test_animador_sigue_vendiendo_a_alumnos(client: FlaskClient, cols: Collectio
             "nombre": "A",
             "cedula": "0911",
             "registrado_por": str(seed.ana),
-            "tablas": ["CARD00001"],
+            "cantidad_tablas": 1,
             "tipo": "alumno",
         },
     )
@@ -156,11 +147,10 @@ def test_reportes_por_rol_vendedor_y_promociones(admin: FlaskClient, cols: Colle
     secre = _crear_vendedor(admin, "secretaria", "secre@uets.edu.ec")
     # ANA (animadora) vende 7 tablas = 1 paquete de 5 + 1 par ($15).
     login_as(admin, "ana")
-    tablas_ana = [f"CARD0000{i}" for i in range(1, 8)]
     assert (
         admin.post(
             "/api/registrarParticipante",
-            json={"nombre": "P1", "cedula": "01", "registrado_por": str(seed.ana), "tablas": tablas_ana},
+            json={"nombre": "P1", "cedula": "01", "registrado_por": str(seed.ana), "cantidad_tablas": 7},
         ).status_code
         == 201
     )

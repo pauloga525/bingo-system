@@ -16,7 +16,7 @@ from bingo.domain.cards import (
     validar_duplicados,
 )
 from bingo.domain.pricing import calcular_total
-from bingo.domain.serials import SerialRange, safe_filename_part, serial_number
+from bingo.domain.serials import safe_filename_part, serial_number
 
 
 @pytest.mark.parametrize(
@@ -72,14 +72,6 @@ def test_count_hits_counts_free_center() -> None:
 def test_internal_repeats() -> None:
     matrix = [[1, 1, 3, 4, 5]] + [[None] * 5 for _ in range(4)]
     assert internal_repeats([{"serial": "S", "matrix": matrix}])["S"]["duplicates"] == [1]
-
-
-def test_serial_range_handles_descending_ranges() -> None:
-    rango = SerialRange("CARD00020", "CARD00011")
-    assert rango.contains("CARD00015")
-    assert not rango.contains("CARD00021")
-    assert rango.mongo_filter() == {"$gte": "CARD00011", "$lte": "CARD00020"}
-    assert SerialRange.of_user({"fromSerial": None}) is None
 
 
 def test_serial_helpers() -> None:

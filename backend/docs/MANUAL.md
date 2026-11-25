@@ -134,8 +134,8 @@ Todos entran en el panel con **"Iniciar sesión con Google"** usando su cuenta `
 
 | Quién | Cómo obtiene acceso | Qué ve |
 | --- | --- | --- |
-| **Administrador** | `admin@uets.edu.ec` (variable `BINGO_ADMIN_EMAILS`) | Todo: participantes, tablas, reportes, **Animadores**, **Estudiantes**, reservar tablas |
-| **Animador** | El administrador le pone su correo en **Animadores** | Sus participantes, las tablas de su rango y **Mi curso** (los alumnos de su paralelo) |
+| **Administrador** | `admin@uets.edu.ec` (variable `BINGO_ADMIN_EMAILS`) | Todo: participantes, tablas, reportes, **Vendedores**, **Estudiantes**, mantenimiento |
+| **Animador** | El administrador le pone su correo en **Animadores** | Sus participantes (vende tablas de la cola) y **Mi curso** (los alumnos de su paralelo) |
 | **Estudiante** | Se registra solo la primera vez (ver abajo) | Únicamente **Mis tablas** (con descarga en PDF) |
 | **Comprador externo** | No necesita cuenta | Página pública **`/consulta`**: escribe su cédula y ve/descarga sus tablas |
 
@@ -144,8 +144,8 @@ Todos entran en el panel con **"Iniciar sesión con Google"** usando su cuenta `
 2. Escriba su **correo institucional** y guarde. Desde ese momento puede entrar con Google.
 3. Para quitarle el acceso, borre el correo y guarde.
 4. **Nuevo animador** crea el animador y su cuenta de ventas a la vez.
-5. **Eliminar** (papelera) borra al animador, salvo que ya tenga participantes o tablas reservadas;
-   en ese caso quítele el correo.
+5. **Eliminar** (papelera) borra al animador, salvo que ya tenga participantes registrados; en ese
+   caso quítele el correo.
 
 ### 5.1.1 Asignar o reasignar el curso de un animador (administrador)
 **Regla:** cada curso (paralelo) tiene **un solo animador**, y cada animador **un solo curso**. El curso
@@ -176,8 +176,8 @@ En **Vendedores** (antes "Animadores") cada persona tiene un **Rol**:
 | Secretaría, Financiero, Parroquia, Oratorio | No | **Solo externos** |
 
 Todos los roles tienen los mismos permisos en el panel (participantes, buscar, cartones). Se crean
-igual que un animador: **Nuevo vendedor** → nombre, correo `@uets.edu.ec`, rol. Luego se les
-**reserva** un rango de tablas (5.2). En su formulario de participante el tipo queda fijo en
+igual que un animador: **Nuevo vendedor** → nombre, correo `@uets.edu.ec`, rol. Venden de la misma
+cola de tablas que todos (5.2). En su formulario de participante el tipo queda fijo en
 **Externo**, y el servidor rechaza cualquier otro tipo. No ven **Mi curso**.
 
 **Promociones (para todos):** el cobro se calcula por participante con todas sus tablas: paquetes de
@@ -187,18 +187,25 @@ Al añadir cartones a un participante se cobra solo la diferencia, con la promoc
 **Reportes:** muestra tablas vendidas, dinero recaudado, promociones vendidas (cuántos paquetes de
 5, de 2 y sueltas), ventas **por rol** y **por cada vendedor**, con filtro por rol y búsqueda.
 
-### 5.2 Reservar tablas a un animador (administrador)
-Un animador solo puede vender las tablas de su rango reservado, y cada temporada las reservas
-empiezan en cero.
+### 5.2 Venta de tablas en cola (todos los vendedores)
+Ya **no** se reservan rangos de tablas por animador. Todas las tablas forman **una sola cola** en
+orden de serial y cada venta se lleva las **siguientes libres**:
 
-1. Panel → **Animadores**. La columna **Tablas** muestra el rango de cada animador y cuántas usó
-   (por ejemplo `CARD10951 – CARD11000 (12/50)`).
-2. Si no tiene rango, pulse **Reservar** y escriba la cantidad. El sistema le asigna un bloque
-   seguido de tablas libres, empezando por los seriales más altos.
-3. La reserva se hace una sola vez por animador; para cambiarla hay que corregirla en la base de datos.
+- un animador vende 4 tablas a Pepito → recibe `CARD00001` a `CARD00004`;
+- después otro vendedor vende 2 → recibe `CARD00005` y `CARD00006`; y así sucesivamente.
 
-(El cuadro "Reservar tablas" de la página **Participantes** reserva tablas para la cuenta del
-administrador, para que él mismo venda.)
+Cómo se vende:
+1. **Participantes → Añadir Participante**: datos del comprador y **cantidad** de tablas (botones
+   rápidos 1, 2, 5, 10). Se ve el total con la promoción y qué tablas tocarían en ese momento.
+2. Al **guardar**, el servidor asigna las tablas y muestra los seriales entregados. Si dos vendedores
+   guardan a la vez, cada uno recibe un bloque seguido distinto (nunca la misma tabla).
+3. Para venderle más a un participante: **Ver cartones → Añadir** y la cantidad (también de la cola).
+4. Si se quita una tabla o se borra un participante, sus tablas **vuelven a la cola** y las toma la
+   siguiente venta.
+
+En **Participantes** se ve cuántas tablas vendió cada uno, cuántas quedan en la cola y la próxima que
+se entregará. Solo el **administrador** puede asignar una tabla específica (por API, para corregir
+casos puntuales); la cola la salta.
 
 ### 5.3 Registro de estudiantes
 1. El estudiante entra con Google con su correo estudiantil (`nombre.apellido.est@uets.edu.ec`).
@@ -222,10 +229,9 @@ registros de prueba antes del evento o para empezar de cero sin reiniciar toda l
    última confirmación.
 3. Al confirmar:
    - se borran **todos** los participantes (alumnos, docentes y externos) de todos los animadores;
-   - sus tablas quedan **libres** para volver a venderse;
+   - sus tablas **vuelven a la cola** para volver a venderse;
    - los contadores de ventas (tablas usadas y total vendido) de cada animador vuelven a cero.
-4. **No** se borran las reservas de tablas de los animadores, los estudiantes, los animadores ni el
-   historial de tablas ganadoras.
+4. **No** se borran los estudiantes, los vendedores ni el historial de tablas ganadoras.
 
 Antes de borrar, el servidor guarda un respaldo en `backend\backups\participantes_<fecha>.json`, que
 contiene cédulas y nombres: no lo comparta. Para restaurarlo:
@@ -251,16 +257,16 @@ juego nuevo, **conservando los estudiantes y los animadores** (con sus correos y
 4. Al confirmar, el servidor:
    - genera las tablas nuevas y su PDF (si esto falla, **no se borra nada**);
    - guarda un respaldo en `backend\backups\nuevo_juego_<fecha>\` con las tablas, ganadoras,
-     participantes y reservas que va a borrar;
+     participantes y contadores que va a borrar;
    - borra **todas** las tablas, las tablas ganadoras y **todos** los participantes con sus
      asignaciones;
-   - pone en cero las reservas y los contadores de ventas de los animadores;
+   - pone en cero los contadores de ventas de los vendedores;
    - guarda las tablas nuevas y deja el tablero sin cartones hasta que se vendan.
 5. El **PDF de las tablas nuevas se descarga solo** para imprimirlo. Si no aparece, use **Descargar
    PDF de tablas**; el archivo también queda en el servidor, en `backend\upload\tablas_<fecha>.pdf`.
 
-Después hay que volver a **reservar tablas** a cada animador (sección 5.2). Con 11000 tablas el
-proceso tarda unos segundos. Cada reinicio queda anotado en el registro del servidor con el correo
+Las tablas nuevas quedan en la cola desde `CARD00001` y se pueden vender enseguida (sección 5.2).
+Con 11000 tablas el proceso tarda unos segundos. Cada reinicio queda anotado en el registro del servidor con el correo
 del administrador.
 
 > El respaldo contiene cédulas y nombres: no lo comparta. Para recuperar el estado anterior, restaure
@@ -380,7 +386,7 @@ tablas se generan con **Mantenimiento → Nuevo juego desde cero** (sección 5.6
 - [ ] `.env` del servidor con `BINGO_SECRET_KEY` y `GOOGLE_CLIENT_ID`
 - [ ] `http://localhost:5000/health` → `ok`
 - [ ] Panel abre y el botón de Google funciona con `admin@uets.edu.ec`
-- [ ] Animadores con correo y tablas reservadas
+- [ ] Vendedores con correo y tablas generadas (cola con tablas disponibles)
 - [ ] Tablero: **Nuevo Juego** muestra la cantidad de tablas vendidas
 - [ ] Respaldo del día hecho
 

@@ -3,33 +3,15 @@ from __future__ import annotations
 from flask.testing import FlaskClient
 
 from bingo.db import Collections
-from bingo.domain.cards import format_serial, generate_bingo_card
+from bingo.domain.cards import format_serial
 
 from .conftest import Seed, login_as, register
 
 
-def test_assign_tables_ignores_assigned_tables(client: FlaskClient, cols: Collections, seed: Seed) -> None:
-    for i in range(21, 26):
-        cols.tables.insert_one({"serial": format_serial(i), "matrix": generate_bingo_card(), "stateAsigned": False})
-    # CARD00025 está asignada pero no reservada: antes el filtro "$or" duplicado la tomaba igual.
-    cols.tables.update_one({"serial": "CARD00025"}, {"$set": {"stateAsigned": True}})
-    cols.tables.update_many({"serial": {"$lte": "CARD00020"}}, {"$set": {"stateReserved": True}})
-    nuevo = cols.users.insert_one({"usuario": "NEW", "tipo_usuario": 1}).inserted_id
-
-    denied = client.post(
-        f"/api/users/{nuevo}/assign_tables", json={"totalTables": 2, "requesting_user_id": str(seed.ana)}
-    )
-    assert denied.status_code == 403
-    login_as(client, "admin")
-    resp = client.post(
-        f"/api/users/{nuevo}/assign_tables", json={"totalTables": 3, "requesting_user_id": str(seed.admin)}
-    )
-    assert resp.status_code == 200, resp.json
-    assert (resp.json["from"], resp.json["to"]) == ("CARD00024", "CARD00022")
-    again = client.post(
-        f"/api/users/{nuevo}/assign_tables", json={"totalTables": 1, "requesting_user_id": str(seed.admin)}
-    )
-    assert again.status_code == 400
+def test_queue_preview_validations(client: FlaskClient, seed: Seed) -> None:
+    assert client.post("/api/obtenerTablasConsecutivas", json={"cantidad_tablas": 0}).status_code == 400
+    resp = client.post("/api/obtenerTablasConsecutivas", json={"cantidad_tablas": 21})
+    assert resp.status_code == 400 and resp.json["message"] == "Solo quedan 20 tablas disponibles."
 
 
 def test_validar_tablas_get_is_read_only_and_post_fixes(client: FlaskClient, cols: Collections, seed: Seed) -> None:
@@ -47,7 +29,6 @@ def test_validar_tablas_get_is_read_only_and_post_fixes(client: FlaskClient, col
     ana = cols.users.find_one({"_id": seed.ana})
     assert ana is not None
     assert (ana["usedTables"], ana["total_vendido"]) == (2, 5)
-    assert fixed["tablas_disponibles"][0] == "CARD00003"
 
 
 def test_tables_listing_with_owner_and_search(client: FlaskClient, seed: Seed) -> None:

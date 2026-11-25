@@ -6,6 +6,7 @@ from flask import Blueprint, Response, jsonify, request
 
 from ..auth import require_admin
 from ..db import get_db
+from ..services.queue import TableQueue
 from ..services.reports import ReportService
 from ..services.tables import PeopleService, TableService
 from ..utils import json_body, safe_int
@@ -33,18 +34,22 @@ def validar_tabla_serial(serial: str) -> Response:
 
 @bp.post("/obtenerTablasConsecutivas")
 def obtener_tablas_consecutivas() -> Response:
-    data = json_body()
-    seriales = TableService(get_db()).consecutive_available(
-        data.get("usuario_id"), safe_int(data.get("cantidad_tablas"), 0)
-    )
+    """Vista previa: las tablas que recibiría ahora una venta de ``cantidad_tablas`` (no asigna)."""
+    seriales = TableQueue(get_db()).peek(safe_int(json_body().get("cantidad_tablas"), 0))
     return jsonify(
         {
             "success": True,
-            "message": "Tablas disponibles obtenidas correctamente.",
+            "message": "Siguientes tablas de la cola.",
             "tablas_consecutivas": seriales,
             "cantidad": len(seriales),
         }
     )
+
+
+@bp.get("/cola-tablas")
+def cola_tablas() -> Response:
+    """Estado de la cola de venta: total, vendidas, disponibles y próxima tabla."""
+    return jsonify({"success": True, **TableQueue(get_db()).status()})
 
 
 @bp.get("/estudiante/<busqueda>")

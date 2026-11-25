@@ -7,8 +7,8 @@ import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Edit, LucideAngularModule, Plus, Search, Trash2 } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
-import { errorBody, errorMessage, onlyDigits } from '../core/http';
-import { CARGOS, SessionService } from '../core/session';
+import { errorBody, errorMessage } from '../core/http';
+import { CARGOS } from '../core/session';
 import { CrudField, CrudForm, CrudOption, CrudValues } from '../shared/crud-form';
 
 interface CursoBase {
@@ -27,7 +27,8 @@ interface Animador extends CursoBase {
   curso_asignado: boolean;
   usuario: string | null;
   usuario_id: string | null;
-  reserva: { total: number; usadas: number; desde: string; hasta: string } | null;
+  /** Tablas vendidas y monto (las tablas se venden en cola, sin reservas). */
+  ventas?: { tablas: number; monto: number };
 }
 
 interface Curso extends CursoBase {
@@ -50,7 +51,7 @@ const cursoKey = (c: CursoBase): string =>
 const cursoNombre = (c: CursoBase): string =>
   [c.curso, c.especialidad, `${c.nivel}°`, c.paralelo].filter(Boolean).join(' · ');
 
-const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
+const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Vendidas', ''];
 
 @Component({
   selector: 'app-animadores-admin',
@@ -152,19 +153,7 @@ const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Tablas
                   </td>
                   <td class="px-3 py-2">{{ a.usuario || '—' }}</td>
                   <td class="px-3 py-2 whitespace-nowrap">
-                    @if (a.reserva; as r) {
-                      <span [title]="'Usadas ' + r.usadas + ' de ' + r.total">
-                        {{ r.desde }} – {{ r.hasta }} ({{ r.usadas }}/{{ r.total }})
-                      </span>
-                    } @else {
-                      <button
-                        type="button"
-                        (click)="reservar(a)"
-                        class="text-sm text-blue-600 hover:underline"
-                      >
-                        Reservar
-                      </button>
-                    }
+                    {{ a.ventas?.tablas || 0 }} (\${{ a.ventas?.monto || 0 }})
                   </td>
                   <td class="px-3 py-2 whitespace-nowrap">
                     <button
@@ -211,7 +200,6 @@ const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Tablas
 })
 export class AnimadoresAdmin implements OnInit {
   private readonly http = inject(HttpClient);
-  private readonly session = inject(SessionService);
   protected readonly PlusIcon = Plus;
   protected readonly SearchIcon = Search;
   protected readonly EditIcon = Edit;
@@ -374,28 +362,6 @@ export class AnimadoresAdmin implements OnInit {
       await this.cargar();
     } catch (err) {
       alert(errorMessage(err, 'No se pudo eliminar.'));
-    }
-  }
-
-  /** Reserva un bloque de tablas libres a la cuenta del animador (solo admin). */
-  protected async reservar(a: Animador): Promise<void> {
-    if (!a.usuario_id) {
-      alert('Este animador aún no tiene cuenta. Edítelo y guarde para crearla.');
-      return;
-    }
-    const cantidad = parseInt(onlyDigits(prompt(`¿Cuántas tablas reservar para ${a.nombre}?`)), 10);
-    if (!cantidad) return;
-    try {
-      const data = await firstValueFrom(
-        this.http.post<{ from: string; to: string }>(`/api/users/${a.usuario_id}/assign_tables`, {
-          totalTables: cantidad,
-          requesting_user_id: this.session.user()?.id,
-        }),
-      );
-      alert(`Tablas reservadas: ${data.from} a ${data.to}`);
-      await this.cargar();
-    } catch (err) {
-      alert(errorMessage(err, 'No se pudo reservar.'));
     }
   }
 }

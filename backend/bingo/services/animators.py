@@ -109,15 +109,11 @@ def student_course_query(course: Course) -> dict[str, Any]:
     }
 
 
-def _reservation(user: Doc | None) -> dict[str, Any] | None:
-    total = safe_int((user or {}).get("totalTables"), 0)
-    if not user or total <= 0:
-        return None
+def _sales(user: Doc | None) -> dict[str, int]:
+    """Tablas vendidas y monto acumulado de la cuenta (las tablas se venden en cola)."""
     return {
-        "total": total,
-        "usadas": safe_int(user.get("usedTables"), 0),
-        "desde": user.get("fromSerial"),
-        "hasta": user.get("toSerial"),
+        "tablas": safe_int((user or {}).get("usedTables"), 0),
+        "monto": safe_int((user or {}).get("total_vendido"), 0),
     }
 
 
@@ -190,8 +186,7 @@ class AnimatorService:
             "correo": doc.get("correo", ""),
             "usuario_id": str(user["_id"]) if user else None,
             "usuario": user.get("usuario") if user else None,
-            # Rango de tablas reservado a su cuenta (None si aún no tiene).
-            "reserva": _reservation(user),
+            "ventas": _sales(user),
         }
 
     def linked_user(self, doc: Doc) -> Doc | None:
@@ -375,14 +370,12 @@ class AnimatorService:
         return self.serialize(updated)
 
     def delete(self, animator_id: Any) -> None:
-        """Elimina el animador y su cuenta, salvo que ya tenga participantes o tablas reservadas."""
+        """Elimina el animador y su cuenta, salvo que ya tenga participantes registrados."""
         doc = self.get(animator_id)
         user = self.linked_user(doc)
         if user:
             if self.cols.participants.count_documents({"registrado_por": user["_id"]}, limit=1):
                 raise Conflict("El animador tiene participantes registrados; quite su correo en lugar de eliminarlo.")
-            if safe_int(user.get("totalTables"), 0) > 0:
-                raise Conflict("El animador tiene tablas reservadas; quite su correo en lugar de eliminarlo.")
             if safe_int(user.get("tipo_usuario"), 1) == ANIMADOR:
                 self.cols.users.delete_one({"_id": user["_id"]})
         self.cols.animators.delete_one({"_id": doc["_id"]})

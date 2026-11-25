@@ -145,12 +145,7 @@ def test_animator_cannot_use_admin_endpoints(client: FlaskClient, seed: Seed) ->
     assert client.get("/api/animadores").status_code == 403
     assert client.get("/api/estudiantes").status_code == 403
     assert client.get("/api/reportes").status_code == 403
-    assert (
-        client.post(
-            f"/api/users/{seed.beto}/assign_tables", json={"totalTables": 1, "requesting_user_id": str(seed.ana)}
-        ).status_code
-        == 403
-    )
+    assert client.get(f"/api/validar-tablas/{seed.beto}").status_code == 403
 
 
 # ------------------------------------------------------------- estudiante

@@ -178,10 +178,16 @@ def logout(client: FlaskClient) -> None:
 
 
 def register(client: FlaskClient, seller: ObjectId, cedula: str, tablas: list[str]) -> Any:
-    """Registra un participante con la sesión del vendedor (que queda iniciada)."""
-    if seller in _EMAIL_BY_ID:
-        login_as(client, _EMAIL_BY_ID[seller])
-    return client.post(
+    """Registra un participante de ``seller`` con tablas específicas y deja iniciada la sesión del vendedor.
+
+    Elegir seriales solo lo puede hacer el administrador (los vendedores venden en
+    cola), así que el registro se hace con la sesión del admin.
+    """
+    login_as(client, "admin")
+    resp = client.post(
         "/api/registrarParticipante",
         json={"nombre": "Juan", "apellido": "Pérez", "cedula": cedula, "tablas": tablas, "registrado_por": str(seller)},
     )
+    if seller in _EMAIL_BY_ID:
+        login_as(client, _EMAIL_BY_ID[seller])
+    return resp

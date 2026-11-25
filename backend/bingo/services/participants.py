@@ -11,6 +11,9 @@ Invariantes que este servicio mantiene en todos los flujos:
 - Los vendedores con rol distinto de animador (secretaría, financiero,
   parroquia, oratorio) solo registran participantes de tipo ``externo``.
   ``rol_vendedor`` guarda el rol de quien vendió (lo usan los reportes).
+- Las tablas se venden **en cola** (``services/queue.py``): cada venta toma
+  las siguientes tablas libres en orden de serial. No hay rangos ni cupos por
+  vendedor. Solo el administrador puede elegir seriales específicos.
 
 MongoDB standalone no ofrece transacciones, así que la asignación se hace
 tabla por tabla con un filtro condicional (``stateAsigned != True``) y, si
@@ -27,9 +30,9 @@ from bson import ObjectId
 from ..db import Collections, Doc
 from ..domain.pricing import calcular_total
 from ..domain.roles import ETIQUETAS, EXTERNO, rol_de, solo_externos
-from ..domain.serials import SerialRange
 from ..errors import ApiError, Conflict, Forbidden, NotFound
 from ..utils import ids_to_str, require_object_id, safe_int, try_object_id
+from .queue import TableQueue
 
 ADMIN = 0
 _NOT_ASSIGNED = {"$ne": True}
@@ -49,8 +52,8 @@ def table_summary(tabla: Doc) -> dict[str, Any]:
     }
 
 
-def _partition_refs(refs: list[Any], allowed: SerialRange | None) -> tuple[list[ObjectId], list[str]]:
-    """Separa las referencias en ObjectIds y seriales, validando el rango de los seriales."""
+def _partition_refs(refs: list[Any]) -> tuple[list[ObjectId], list[str]]:
+    """Separa las referencias en ObjectIds y seriales."""
     oids: list[ObjectId] = []
     serials: list[str] = []
     for ref in refs:
@@ -58,10 +61,7 @@ def _partition_refs(refs: list[Any], allowed: SerialRange | None) -> tuple[list[
         if oid is not None:
             oids.append(oid)
             continue
-        serial = str(ref).strip()
-        if allowed is not None and not allowed.contains(serial):
-            raise ApiError(f"La tabla {serial} está fuera del rango permitido ({allowed}).")
-        serials.append(serial)
+        serials.append(str(ref).strip())
     return oids, serials
 
 
@@ -108,12 +108,9 @@ class ParticipantService:
         return actor
 
     # ------------------------------------------------------ tablas (bajo nivel)
-    def resolve_tables(self, refs: list[Any], allowed: SerialRange | None) -> list[ObjectId]:
-        """Convierte seriales u ObjectIds en ``_id`` de tablas existentes.
-
-        Si ``allowed`` no es ``None`` los seriales deben estar en ese rango.
-        """
-        oids, serials = _partition_refs(refs, allowed)
+    def resolve_tables(self, refs: list[Any]) -> list[ObjectId]:
+        """Convierte seriales u ObjectIds en ``_id`` de tablas existentes (sin repetir)."""
+        oids, serials = _partition_refs(refs)
         by_serial = self._ids_by_serial(serials)
         self._ensure_ids_exist(oids)
 
@@ -180,28 +177,6 @@ class ParticipantService:
         raise Conflict(f"El participante con cédula {cedula} ya fue registrado por {animador}.")
 
     @staticmethod
-    def _remaining(user: Doc) -> int:
-        return safe_int(user.get("totalTables"), 0) - safe_int(user.get("usedTables"), 0)
-
-    def _check_quota(self, seller: Doc, requested: int) -> None:
-        """Valida que el vendedor tenga cupo para ``requested`` tablas más."""
-        remaining = self._remaining(seller)
-        if safe_int(seller.get("totalTables"), 0) > 0 and remaining <= 0:
-            raise ApiError("Ya no tienes tablas disponibles.")
-        if requested > remaining:
-            raise ApiError(f"No puedes asignar {requested} tablas. Solo tienes {remaining} disponibles.")
-
-    def _insert_with_tables(self, doc: Doc, table_ids: list[ObjectId]) -> Doc:
-        doc["_id"] = ObjectId()
-        self.claim_tables(table_ids, doc["_id"])
-        try:
-            self.cols.participants.insert_one(doc)
-        except Exception:
-            self.release_tables(table_ids)
-            raise
-        return doc
-
-    @staticmethod
     def _sale_type(seller: Doc, tipo: Any, default: str = "alumno") -> tuple[str, str]:
         """``(tipo de participante, rol del vendedor)``; valida que el rol pueda venderle."""
         rol = rol_de(seller)
@@ -211,16 +186,31 @@ class ParticipantService:
         return valor, rol
 
     # ----------------------------------------------------------- registro
-    def register(self, data: dict[str, Any]) -> Doc:
-        """Registra un participante con tablas elegidas (seriales u ObjectIds)."""
+    def _take_tables(self, allow_serials: bool, refs: Any, cantidad: Any, participant_id: ObjectId) -> list[ObjectId]:
+        """Asigna tablas a ``participant_id``: de la cola o, solo el admin, por serial."""
+        if refs:
+            if not isinstance(refs, list):
+                raise ApiError("El campo 'tablas' debe ser una lista.")
+            if not allow_serials:
+                raise Forbidden("Las tablas se asignan en orden de la cola: indique solo la cantidad.")
+            table_ids = self.resolve_tables(refs)
+            self.claim_tables(table_ids, participant_id)
+            return table_ids
+        n = safe_int(cantidad, 0)
+        if n <= 0:
+            raise ApiError("Indique cuántas tablas vende (cantidad mayor a 0).")
+        return TableQueue(self.cols).take(n, participant_id, self.claim_tables)
+
+    def register(self, data: dict[str, Any], allow_serials: bool = False) -> Doc:
+        """Registra un participante con ``cantidad_tablas`` tomadas de la cola.
+
+        Con ``allow_serials`` (sesión de administrador) se aceptan en su lugar
+        ``tablas`` específicas (seriales u ObjectIds).
+        """
         if not data:
             raise ApiError("No se proporcionaron datos del participante.")
         nombre = data.get("nombre")
         cedula = str(data.get("cedula") or "").strip()
-        refs = data.get("tablas") or []
-        if not isinstance(refs, list):
-            raise ApiError("El campo 'tablas' debe ser una lista.")
-
         if not data.get("registrado_por"):
             raise ApiError("Debe incluir el campo 'registrado_por' (usuario que realiza el registro).")
         seller_id = require_object_id(
@@ -228,111 +218,78 @@ class ParticipantService:
         )
         seller = self.get_user(seller_id)
         tipo, rol = self._sale_type(seller, data.get("tipo"))
-
-        self._check_quota(seller, len(refs))
         if not nombre:
             raise ApiError("El campo 'nombre' es obligatorio.")
         if not cedula:
             raise ApiError("El campo 'cedula' es obligatorio.")
-        if not refs:
+        refs = data.get("tablas") or []
+        if not refs and safe_int(data.get("cantidad_tablas"), 0) <= 0:
             raise ApiError("Debe asignarse al menos una tabla al participante.")
         self._ensure_cedula_free(cedula)
 
-        table_ids = self.resolve_tables(refs, SerialRange.of_user(seller))
+        participant_id = ObjectId()
+        table_ids = self._take_tables(allow_serials, refs, data.get("cantidad_tablas"), participant_id)
         total_pagar = calcular_total(len(table_ids))
-        doc = self._insert_with_tables(
-            {
-                "nombre": nombre,
-                "apellido": data.get("apellido", ""),
-                "cedula": cedula,
-                "celular": data.get("celular", ""),
-                "telefono": data.get("telefono", data.get("celular", "")),
-                "tipo": tipo,
-                "rol_vendedor": rol,
-                "nivelCurso": data.get("nivelCurso", ""),
-                "paralelo": data.get("paralelo", ""),
-                "animador": data.get("animador", ""),
-                "tablas": table_ids,
-                "grupoAdetitss": data.get("grupoAdetitss", ""),
-                "fecha_registro": datetime.now().isoformat(),
-                "registrado_por": seller_id,
-                "total_pagar": total_pagar,
-            },
-            table_ids,
-        )
+        doc: Doc = {
+            "_id": participant_id,
+            "nombre": nombre,
+            "apellido": data.get("apellido", ""),
+            "cedula": cedula,
+            "celular": data.get("celular", ""),
+            "telefono": data.get("telefono", data.get("celular", "")),
+            "tipo": tipo,
+            "rol_vendedor": rol,
+            "nivelCurso": data.get("nivelCurso", ""),
+            "paralelo": data.get("paralelo", ""),
+            "animador": data.get("animador", ""),
+            "tablas": table_ids,
+            "grupoAdetitss": data.get("grupoAdetitss", ""),
+            "fecha_registro": datetime.now().isoformat(),
+            "registrado_por": seller_id,
+            "total_pagar": total_pagar,
+        }
+        try:
+            self.cols.participants.insert_one(doc)
+        except Exception:
+            self.release_tables(table_ids)
+            raise
         self._update_seller(seller_id, len(table_ids), total_pagar)
-        return {**doc, "_id": str(doc["_id"]), "registrado_por": str(seller_id), "tablas": ids_to_str(table_ids)}
+        return {
+            **doc,
+            "_id": str(participant_id),
+            "registrado_por": str(seller_id),
+            "tablas": ids_to_str(table_ids),
+            "seriales": self._serials(table_ids),
+        }
 
     def register_auto(self, data: dict[str, Any]) -> ObjectId:
-        """Registra un participante tomando automáticamente tablas libres de la reserva del usuario."""
-        nombre = data.get("nombre")
-        cedula = str(data.get("cedula") or "").strip()
+        """Igual que :meth:`register` tomando de la cola (``cantidad_tablas``, 1 por defecto)."""
         cantidad = safe_int(data.get("cantidad_tablas"), 1)
-        if not nombre or not cedula or not data.get("registrado_por"):
-            raise ApiError("Nombre, cédula y registrado_por son obligatorios")
         if cantidad <= 0:
             raise ApiError("La cantidad de tablas debe ser mayor a 0.")
-        seller_id = require_object_id(data["registrado_por"], "ID de usuario inválido")
-        seller = self.get_user(seller_id, "Usuario no encontrado")
-        tipo, rol = self._sale_type(seller, data.get("tipo"))
+        doc = self.register({**data, "tablas": [], "cantidad_tablas": cantidad})
+        return ObjectId(doc["_id"])
 
-        remaining = self._remaining(seller)
-        if remaining <= 0:
-            raise ApiError("Ya no tienes tablas disponibles")
-        if cantidad > remaining:
-            raise ApiError(f"Sólo quedan {remaining} tablas disponibles")
-        self._ensure_cedula_free(cedula)
-
-        # Antes se tomaba reserved_ids[used:used+n], que falla en cuanto se
-        # libera una tabla. Ahora se eligen las libres respetando el orden de la reserva.
-        reserved: list[ObjectId] = seller.get("reserved_table_ids") or []
-        free = {
-            d["_id"]
-            for d in self.cols.tables.find({"_id": {"$in": reserved}, "stateAsigned": _NOT_ASSIGNED}, {"_id": 1})
-        }
-        table_ids = [tid for tid in reserved if tid in free][:cantidad]
-        if len(table_ids) < cantidad:
-            raise ApiError(f"Sólo quedan {len(table_ids)} tablas disponibles")
-
-        total_pagar = calcular_total(cantidad)
-        doc = self._insert_with_tables(
-            {
-                "nombre": nombre,
-                "apellido": data.get("apellido", ""),
-                "cedula": cedula,
-                "celular": data.get("celular", ""),
-                "tipo": tipo,
-                "rol_vendedor": rol,
-                "tablas": table_ids,
-                "registrado_por": seller_id,
-                "fecha_registro": datetime.now().isoformat(),
-                "total_pagar": total_pagar,
-            },
-            table_ids,
-        )
-        self._update_seller(seller_id, cantidad, total_pagar)
-        participant_id: ObjectId = doc["_id"]
-        return participant_id
+    def _serials(self, table_ids: list[ObjectId]) -> list[str]:
+        found = {t["_id"]: t["serial"] for t in self.cols.tables.find({"_id": {"$in": table_ids}}, {"serial": 1})}
+        return sorted(found[t] for t in table_ids if t in found)
 
     # ------------------------------------------------------ modificaciones
-    def add_tables(self, participant_id: ObjectId, refs: list[Any], usuario_id: Any) -> None:
-        if not refs:
+    def add_tables(
+        self, participant_id: ObjectId, refs: list[Any], usuario_id: Any, cantidad: Any = 0, allow_serials: bool = False
+    ) -> list[str]:
+        """Agrega tablas a un participante (de la cola; el admin puede indicar seriales).
+
+        Devuelve los seriales agregados.
+        """
+        if not refs and safe_int(cantidad, 0) <= 0:
             raise ApiError("Debe proporcionar al menos una tabla.")
         if not usuario_id:
             raise ApiError("Debe proporcionar el ID del usuario.")
         participante = self.get_participant(participant_id)
-        actor = self._authorize(usuario_id, participante, "modificar")
+        self._authorize(usuario_id, participante, "modificar")
 
-        seller_id = participante.get("registrado_por")
-        seller = self.cols.users.find_one({"_id": seller_id}) if seller_id else None
-        allowed = None if is_admin(actor) or seller is None else SerialRange.of_user(seller)
-        table_ids = self.resolve_tables(refs, allowed)
-        if seller is not None and not is_admin(actor) and len(table_ids) > self._remaining(seller):
-            raise ApiError(
-                f"No puedes asignar {len(table_ids)} tablas. Solo tienes {self._remaining(seller)} disponibles."
-            )
-
-        self.claim_tables(table_ids, participant_id)
+        table_ids = self._take_tables(allow_serials, refs, cantidad, participant_id)
         old_count = len(participante.get("tablas") or [])
         old_total = safe_int(participante.get("total_pagar"), calcular_total(old_count))
         new_total = calcular_total(old_count + len(table_ids))
@@ -340,7 +297,8 @@ class ParticipantService:
             {"_id": participant_id},
             {"$addToSet": {"tablas": {"$each": table_ids}}, "$set": {"total_pagar": new_total}},
         )
-        self._update_seller(seller_id, len(table_ids), new_total - old_total)
+        self._update_seller(participante.get("registrado_por"), len(table_ids), new_total - old_total)
+        return self._serials(table_ids)
 
     def remove_table(self, participant_id: ObjectId, table_id: ObjectId, usuario_id: Any) -> None:
         if not usuario_id:

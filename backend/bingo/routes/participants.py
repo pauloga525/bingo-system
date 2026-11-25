@@ -29,7 +29,7 @@ def _svc() -> ParticipantService:
 @bp.post("/registrarParticipante")
 @bp.post("/CreateParticipantes")
 def registrar_participante() -> tuple[Response, int]:
-    participante = _svc().register(json_body())
+    participante = _svc().register(json_body(), allow_serials=current_identity().is_admin)
     return jsonify(
         {"success": True, "message": "Participante registrado exitosamente.", "participante": participante}
     ), 201
@@ -105,8 +105,10 @@ def agregar_tablas_participante(participante_id: str, tipo_usuario: str) -> Resp
     refs = data.get("tablas") or []
     if not isinstance(refs, list):
         raise ApiError("El campo 'tablas' debe ser una lista.")
-    _svc().add_tables(pid, refs, data.get("usuario_id"))
-    return jsonify({"success": True, "message": "Tablas agregadas correctamente."})
+    seriales = _svc().add_tables(
+        pid, refs, data.get("usuario_id"), data.get("cantidad"), allow_serials=current_identity().is_admin
+    )
+    return jsonify({"success": True, "message": "Tablas agregadas correctamente.", "seriales": seriales})
 
 
 @bp.delete("/participante/<participante_id>/tabla/<tabla_id>/<tipo_usuario>")

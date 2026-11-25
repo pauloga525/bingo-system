@@ -178,51 +178,38 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
 
           <fieldset>
             <legend [class]="legend">Tablas de Bingo</legend>
-            @if (rango.fromSerial && rango.toSerial) {
-              <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                Rango permitido: {{ rango.fromSerial }} → {{ rango.toSerial }}
-              </p>
-            }
-            <div class="mb-4 flex items-center gap-3">
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">
+              Las tablas se entregan en orden: al guardar se asignan las siguientes disponibles de
+              la cola.
+            </p>
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="text-gray-700 dark:text-gray-300" for="cantidad">Cantidad</label>
               <input
+                id="cantidad"
                 type="number"
                 min="1"
-                [value]="cantidadSolicitada()"
-                (input)="cantidadSolicitada.set(+$any($event.target).value)"
-                placeholder="Cantidad (Ej. 5)"
-                class="w-36 p-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
+                [value]="cantidad()"
+                (input)="setCantidad($event)"
+                class="w-28 p-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-800 dark:text-white"
               />
-              <button
-                type="button"
-                (click)="obtenerConsecutivas()"
-                [disabled]="!cantidadSolicitada() || cantidadSolicitada() <= 0 || buscando()"
-                class="px-4 py-3 rounded-lg flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed"
-              >
-                @if (buscando()) {
-                  <lucide-icon [img]="LoaderIcon" [size]="20" class="animate-spin" /> Obteniendo...
-                } @else {
-                  Obtener Tablas Consecutivas
-                }
-              </button>
-            </div>
-
-            <div class="space-y-4">
-              @for (tabla of tablas(); track $index) {
-                <input
-                  [value]="tabla"
-                  (input)="setTabla($index, $event)"
-                  placeholder="Ingrese el código de la tabla"
-                  [class]="input"
-                />
+              @for (n of rapidas; track n) {
+                <button
+                  type="button"
+                  (click)="cantidad.set(n); verCola()"
+                  class="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-sm dark:text-white hover:bg-gray-100 dark:hover:bg-gray-800"
+                >
+                  {{ n }}
+                </button>
               }
             </div>
-            <button
-              type="button"
-              (click)="tablas.update((t) => [...t, ''])"
-              class="flex items-center gap-2 text-blue-600 hover:text-blue-700 mt-4"
-            >
-              <lucide-icon [img]="PlusCircleIcon" [size]="20" /> Agregar Otra Tabla
-            </button>
+            @if (vistaPrevia(); as v) {
+              <p class="text-sm text-gray-600 dark:text-gray-400 mt-3">
+                Recibiría ahora: <strong>{{ v }}</strong> (si nadie vende antes de guardar).
+              </p>
+            }
+            @if (errorCola()) {
+              <p class="text-sm text-red-600 mt-3">{{ errorCola() }}</p>
+            }
           </fieldset>
 
           <fieldset>
@@ -261,25 +248,52 @@ export class AddUser {
   protected readonly legend = LEGEND;
 
   protected readonly usuario = this.session.user;
-  /** Rango de tablas reservado, enviado por la lista de participantes. */
-  protected readonly rango: { fromSerial?: string; toSerial?: string } = history.state || {};
 
   /** Secretaría, financiero, parroquia y oratorio solo venden a externos. */
   protected readonly soloExternos = this.session.soloExternos;
   protected readonly tipo = signal<Tipo>(this.session.soloExternos() ? 'externo' : 'alumno');
   protected readonly datos = signal<Datos>({ ...VACIO });
-  protected readonly tablas = signal<string[]>(['']);
-  protected readonly cantidadSolicitada = signal(1);
+  /** Cantidad de tablas que se venden (se toman de la cola al guardar). */
+  protected readonly cantidad = signal(1);
+  protected readonly rapidas = [1, 2, 5, 10];
+  protected readonly vistaPrevia = signal('');
+  protected readonly errorCola = signal('');
   protected readonly buscando = signal(false);
   protected readonly guardando = signal(false);
 
-  private readonly tablasValidas = computed(() =>
-    this.tablas()
-      .map((t) => t.trim())
-      .filter(Boolean),
-  );
-  protected readonly totalPagar = computed(() => calcularTotal(this.tablasValidas().length));
-  protected readonly promociones = computed(() => textoPromociones(this.tablasValidas().length));
+  protected readonly totalPagar = computed(() => calcularTotal(this.cantidad()));
+  protected readonly promociones = computed(() => textoPromociones(this.cantidad()));
+
+  constructor() {
+    void this.verCola();
+  }
+
+  protected setCantidad(event: Event): void {
+    this.cantidad.set(
+      Math.max(0, Math.floor(Number((event.target as HTMLInputElement).value) || 0)),
+    );
+    void this.verCola();
+  }
+
+  /** Vista previa de las tablas que tocarían ahora (no las aparta). */
+  protected async verCola(): Promise<void> {
+    const n = this.cantidad();
+    this.vistaPrevia.set('');
+    this.errorCola.set('');
+    if (n <= 0) return;
+    try {
+      const resp = await firstValueFrom(
+        this.http.post<{ tablas_consecutivas?: string[] }>('/api/obtenerTablasConsecutivas', {
+          cantidad_tablas: n,
+        }),
+      );
+      if (n !== this.cantidad()) return; // cambió mientras respondía
+      const t = resp.tablas_consecutivas || [];
+      this.vistaPrevia.set(t.length > 1 ? `${t[0]} … ${t[t.length - 1]}` : t[0] || '');
+    } catch (err) {
+      this.errorCola.set(errorMessage(err, 'No se pudo consultar la cola de tablas.'));
+    }
+  }
 
   protected volver(): void {
     void this.router.navigateByUrl('/admin/users');
@@ -294,23 +308,6 @@ export class AddUser {
   protected cambiarTipo(event: Event): void {
     this.tipo.set((event.target as HTMLSelectElement).value as Tipo);
     this.datos.set({ ...VACIO });
-    this.tablas.set(['']);
-  }
-
-  /** Guarda el código; si ya está completo y fuera del rango reservado, lo rechaza. */
-  protected setTabla(index: number, event: Event): void {
-    const el = event.target as HTMLInputElement;
-    const value = el.value.trim();
-    const { fromSerial: from, toSerial: to } = this.rango;
-    if (from && to && value.length === from.length) {
-      const [min, max] = from <= to ? [from, to] : [to, from];
-      if (value < min || value > max) {
-        alert(`⚠️ La tabla ${value} está fuera del rango permitido (${from} a ${to})`);
-        el.value = this.tablas()[index];
-        return;
-      }
-    }
-    this.tablas.update((t) => t.map((v, i) => (i === index ? value : v)));
   }
 
   protected async buscarPersona(): Promise<void> {
@@ -364,54 +361,11 @@ export class AddUser {
     }
   }
 
-  protected async obtenerConsecutivas(): Promise<void> {
-    const cantidad = Number(this.cantidadSolicitada()) || 0;
-    if (cantidad <= 0) {
-      alert('Ingrese una cantidad válida mayor a 0');
-      return;
-    }
-    if (
-      this.tablasValidas().length &&
-      !confirm(
-        'Ya existen tablas en el formulario. ¿Desea reemplazarlas con las tablas consecutivas obtenidas?',
-      )
-    ) {
-      return;
-    }
-    this.buscando.set(true);
-    try {
-      const data = await firstValueFrom(
-        this.http.post<{
-          success: boolean;
-          message?: string;
-          cantidad?: number;
-          tablas_consecutivas?: unknown[];
-        }>('/api/obtenerTablasConsecutivas', {
-          usuario_id: this.usuario()?.id,
-          cantidad_tablas: cantidad,
-        }),
-      );
-      if (data.success && Array.isArray(data.tablas_consecutivas)) {
-        const tablas = data.tablas_consecutivas.map(String);
-        this.tablas.set(tablas);
-        if ((data.cantidad || tablas.length) < cantidad) {
-          alert(`Se obtuvieron ${tablas.length} tablas (menos de las solicitadas).`);
-        }
-      } else {
-        alert(data.message || 'No se pudieron obtener tablas consecutivas.');
-      }
-    } catch (err) {
-      alert(errorMessage(err, 'Error al conectar con el servidor al solicitar tablas.'));
-    } finally {
-      this.buscando.set(false);
-    }
-  }
-
   protected async enviar(event: Event): Promise<void> {
     event.preventDefault();
-    const tablas = this.tablasValidas();
-    if (!tablas.length) {
-      alert('Debe ingresar al menos una tabla');
+    const cantidad = this.cantidad();
+    if (cantidad <= 0) {
+      alert('Indique cuántas tablas vende');
       return;
     }
     const user = this.usuario();
@@ -420,7 +374,11 @@ export class AddUser {
     this.guardando.set(true);
     try {
       const resp = await firstValueFrom(
-        this.http.post<{ success: boolean; message?: string }>('/api/CreateParticipantes', {
+        this.http.post<{
+          success: boolean;
+          message?: string;
+          participante?: { seriales?: string[]; total_pagar?: number };
+        }>('/api/CreateParticipantes', {
           nombre: d.nombre,
           apellido: d.apellido,
           cedula: d.cedula,
@@ -430,12 +388,16 @@ export class AddUser {
           paralelo: tipo === 'alumno' ? d.paralelo : '',
           animador: user?.nombres,
           grupoAdetitss: d.grupoAdetitss,
-          tablas,
+          cantidad_tablas: cantidad,
           registrado_por: user?.id,
         }),
       );
       if (resp.success) {
-        alert('Participante creado exitosamente');
+        const seriales = resp.participante?.seriales || [];
+        alert(
+          `Participante creado. Tablas asignadas (${seriales.length}): ${seriales.join(', ')}\n` +
+            `Total a pagar: $${resp.participante?.total_pagar ?? this.totalPagar()}`,
+        );
         this.volver();
       } else {
         alert(resp.message || 'Error al crear el participante');

@@ -9,9 +9,8 @@ from bson import ObjectId
 from pymongo.collection import Collection
 
 from ..db import Collections, Doc
-from ..domain.serials import SerialRange
 from ..errors import ApiError, NotFound
-from ..utils import require_object_id, try_object_id
+from ..utils import try_object_id
 
 _PARTICIPANT_FIELDS = {"nombre": 1, "apellido": 1, "cedula": 1, "nivelCurso": 1, "paralelo": 1, "tablas": 1}
 
@@ -105,35 +104,6 @@ class TableService:
             "disponible": not tabla.get("stateAsigned", False),
             "won": tabla.get("won", False),
         }
-
-    def consecutive_available(self, usuario_id: Any, cantidad: int) -> list[str]:
-        """Primeros ``cantidad`` seriales libres (en orden) del rango del usuario. No asigna nada."""
-        if not usuario_id:
-            raise ApiError("usuario_id es obligatorio.")
-        if cantidad <= 0:
-            raise ApiError("La cantidad de tablas debe ser mayor a 0.")
-        oid = require_object_id(usuario_id, "usuario_id inválido.")
-        usuario = self.cols.users.find_one({"_id": oid})
-        if not usuario:
-            raise NotFound("Usuario no encontrado.")
-        rango = SerialRange.of_user(usuario)
-        if rango is None:
-            raise ApiError("El usuario no tiene un rango de tablas asignado.")
-
-        in_range = {"serial": rango.mongo_filter()}
-        if not self.cols.tables.count_documents(in_range, limit=1):
-            raise ApiError("No hay tablas en el rango asignado al usuario.")
-        libres = [
-            t["serial"]
-            for t in self.cols.tables.find({**in_range, "stateAsigned": {"$ne": True}}, {"serial": 1})
-            .sort("serial", 1)
-            .limit(cantidad)
-        ]
-        if len(libres) < cantidad:
-            raise ApiError(
-                f"No hay suficientes tablas disponibles. Se encontraron {len(libres)} de {cantidad} solicitadas."
-            )
-        return libres
 
 
 class PeopleService:

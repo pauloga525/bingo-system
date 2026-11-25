@@ -48,7 +48,7 @@ const CANTIDAD_INICIAL = '11000';
           Borra <strong>todas</strong> las tablas (generadas y asignadas), las tablas ganadoras y
           todos los participantes con sus asignaciones.
         </li>
-        <li>Las reservas de tablas y los contadores de ventas de los animadores vuelven a cero.</li>
+        <li>Los contadores de ventas de los vendedores vuelven a cero.</li>
         <li>Genera la cantidad de tablas nuevas que indique y descarga su PDF para imprimir.</li>
         <li>
           Se conservan los <strong>estudiantes</strong> y los <strong>animadores</strong> (con sus

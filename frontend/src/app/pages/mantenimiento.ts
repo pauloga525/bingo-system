@@ -49,12 +49,9 @@ interface Resultado {
             Borra de la base de datos <strong>todos</strong> los participantes (alumnos, docentes y
             externos) de todos los animadores.
           </li>
-          <li>Sus tablas quedan libres para volver a venderse.</li>
+          <li>Sus tablas vuelven a la cola para venderse de nuevo.</li>
           <li>Los contadores de ventas de cada animador vuelven a cero.</li>
-          <li>
-            Se conservan: las reservas de tablas de los animadores, los estudiantes, los animadores
-            y el historial de tablas ganadoras.
-          </li>
+          <li>Se conservan: los estudiantes, los vendedores y el historial de tablas ganadoras.</li>
           <li>
             Antes de borrar, el servidor guarda un respaldo en la carpeta
             <code>backups</code> del servidor.
