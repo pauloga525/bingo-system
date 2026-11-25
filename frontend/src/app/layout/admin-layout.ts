@@ -105,9 +105,9 @@ export class AdminLayout {
     ...(this.session.cargo() === 'animador'
       ? [{ path: '/admin/mi-curso', label: 'Mi curso' }]
       : []),
+    ...(this.session.veReportes() ? [{ path: '/admin/reportes', label: 'Reportes' }] : []),
     ...(this.session.isAdmin()
       ? [
-          { path: '/admin/reportes', label: 'Reportes' },
           { path: '/admin/animadores', label: 'Vendedores' },
           { path: '/admin/estudiantes', label: 'Estudiantes' },
           { path: '/admin/mantenimiento', label: 'Mantenimiento' },

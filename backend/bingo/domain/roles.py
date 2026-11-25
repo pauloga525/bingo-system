@@ -23,6 +23,8 @@ ROLES: dict[str, str] = {
 }
 # Roles que solo pueden registrar participantes de tipo externo.
 SOLO_EXTERNOS = frozenset(ROLES) - {ANIMADOR_ROL}
+# Roles que, además del administrador, pueden ver la sección Reportes.
+VEN_REPORTES = frozenset({"financiero"})
 EXTERNO = "externo"
 ETIQUETAS: dict[str, str] = {ADMIN_ROL: "Administrador", **ROLES}
 

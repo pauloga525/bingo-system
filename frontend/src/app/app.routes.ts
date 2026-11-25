@@ -1,6 +1,6 @@
 import { Routes } from '@angular/router';
 
-import { guestGuard, roleGuard } from './core/guards';
+import { guestGuard, reportesGuard, roleGuard } from './core/guards';
 
 const STAFF = ['admin', 'animador'] as const;
 const ADMIN = ['admin'] as const;
@@ -57,12 +57,13 @@ export const routes: Routes = [
       },
       // Alumnos del curso asignado al animador
       { path: 'mi-curso', loadComponent: () => import('./pages/mi-curso').then((m) => m.MiCurso) },
-      // Solo administrador
+      // Administrador y rol Financiero
       {
         path: 'reportes',
-        canActivate: [roleGuard(ADMIN)],
+        canActivate: [reportesGuard],
         loadComponent: () => import('./pages/reports').then((m) => m.Reports),
       },
+      // Solo administrador
       {
         path: 'animadores',
         canActivate: [roleGuard(ADMIN)],

@@ -70,6 +70,8 @@ export class SessionService {
     return u.cargo || (u.rol === 'admin' ? 'admin' : 'animador');
   });
   readonly soloExternos = computed(() => !!this._user()?.solo_externos);
+  /** Reportes: administrador y rol Financiero (el servidor también lo valida). */
+  readonly veReportes = computed(() => this.isAdmin() || this.cargo() === 'financiero');
 
   token(): string | null {
     return localStorage.getItem(TOKEN_KEY);

@@ -33,7 +33,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from .config import Settings
 from .db import Collections, Doc, get_db
-from .domain.roles import ADMIN_ROL, rol_de
+from .domain.roles import ADMIN_ROL, VEN_REPORTES, rol_de
 from .errors import ApiError, Forbidden
 from .services.animators import AnimatorService, normalize_email
 from .services.participants import is_admin
@@ -284,6 +284,19 @@ def _guard() -> None:
         return
     if not identity.is_admin and any(value != identity.user_id for value in _actor_values()):
         raise Forbidden("No puede realizar operaciones en nombre de otro usuario.")
+
+
+def require_reports(view: F) -> F:
+    """Reportes: administrador o un rol de ``VEN_REPORTES`` (financiero)."""
+
+    @wraps(view)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        identity = current_identity()
+        if not identity.is_admin and identity.cargo not in VEN_REPORTES:
+            raise Forbidden("Los reportes son solo para el administrador y el rol Financiero.")
+        return view(*args, **kwargs)
+
+    return cast(F, wrapper)
 
 
 def require_admin(view: F) -> F:

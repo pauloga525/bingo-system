@@ -194,7 +194,9 @@ En **Vendedores** (antes "Animadores") cada persona tiene un **Rol**:
 | Animador | Sí (un paralelo) | Alumnos, docentes y externos |
 | Secretaría, Financiero, Parroquia, Oratorio | No | **Solo externos** |
 
-Todos los roles tienen los mismos permisos en el panel (participantes, buscar, cartones). Se crean
+Todos los roles tienen los mismos permisos en el panel (participantes, buscar, cartones). Además, el
+rol **Financiero** ve la sección **Reportes** (ventas por rol, por vendedor y promociones), igual que el
+administrador; los demás roles no. Se crean
 igual que un animador: **Nuevo vendedor** → nombre, correo `@uets.edu.ec`, rol. Venden de la misma
 cola de tablas que todos (5.2). En su formulario de participante el tipo queda fijo en
 **Externo**, y el servidor rechaza cualquier otro tipo. No ven **Mi curso**.

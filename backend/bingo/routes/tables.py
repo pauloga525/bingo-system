@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from flask import Blueprint, Response, jsonify, request
 
-from ..auth import require_admin
+from ..auth import require_reports
 from ..db import get_db
 from ..services.queue import TableQueue
 from ..services.reports import ReportService
@@ -69,6 +69,6 @@ def buscar_docente(busqueda: str) -> Response:
 
 
 @bp.get("/reportes")
-@require_admin
+@require_reports
 def obtener_reportes() -> Response:
     return jsonify({"success": True, "reportes": ReportService(get_db()).build()})

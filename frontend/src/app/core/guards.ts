@@ -20,6 +20,12 @@ export const roleGuard =
     return roles.includes(role) ? true : router.parseUrl(homeFor(session.user()));
   };
 
+/** Reportes: administrador o vendedor con rol Financiero. */
+export const reportesGuard: CanActivateFn = () => {
+  const session = inject(SessionService);
+  return session.veReportes() ? true : inject(Router).parseUrl(homeFor(session.user()));
+};
+
 /** En /login: si ya hay sesión, ir directo al inicio del rol. */
 export const guestGuard: CanActivateFn = () => {
   const session = inject(SessionService);

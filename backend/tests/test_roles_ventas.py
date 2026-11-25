@@ -137,6 +137,19 @@ def test_perfil_y_venta_solo_externos(admin: FlaskClient, cols: Collections, see
     assert p2 is not None and p2["tipo"] == "externo" and p2["total_pagar"] == 3
 
 
+def test_financiero_ve_reportes_y_los_demas_vendedores_no(admin: FlaskClient) -> None:
+    for rol in ("financiero", "secretaria"):
+        _crear_vendedor(admin, rol, f"{rol}.r@uets.edu.ec")
+    login_as(admin, "financiero.r@uets.edu.ec")
+    resp = admin.get("/api/reportes")
+    assert resp.status_code == 200 and "ventas_por_rol" in resp.json["reportes"]
+    assert admin.get("/api/animadores").status_code == 403  # sigue sin ser administrador
+    login_as(admin, "secretaria.r@uets.edu.ec")
+    assert admin.get("/api/reportes").status_code == 403
+    login_as(admin, "ana")
+    assert admin.get("/api/reportes").status_code == 403
+
+
 def test_animador_sigue_vendiendo_a_alumnos(client: FlaskClient, cols: Collections, seed: Seed) -> None:
     cols.students.insert_one({"Num documento": "0911", "Nombre": "A", "Primer Apellido": "B"})
     perfil = client.get("/api/auth/me").json["usuario"]
