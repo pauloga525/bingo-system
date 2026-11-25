@@ -6,6 +6,7 @@ import {
   ElementRef,
   OnDestroy,
   inject,
+  isDevMode,
   signal,
   viewChild,
 } from '@angular/core';
@@ -78,6 +79,22 @@ interface RegistroPendiente {
           }
         </div>
 
+        <!-- Solo en desarrollo (ng serve): entra sin Google contra el backend de demo local. -->
+        @if (devMode && !registro()) {
+          <div class="border border-dashed border-yellow-600 rounded-lg p-4 space-y-2">
+            <p class="text-xs text-yellow-400 text-center">Login de prueba (solo desarrollo)</p>
+            @for (u of usuariosDemo; track u.correo) {
+              <button
+                type="button"
+                (click)="handleCredential(u.correo)"
+                class="w-full bg-gray-800 hover:bg-gray-700 text-white rounded-lg px-4 py-2 text-sm"
+              >
+                Entrar como {{ u.rol }}
+              </button>
+            }
+          </div>
+        }
+
         <p class="text-center text-sm text-gray-400">
           ¿Compraste tablas y no tienes cuenta institucional?
           <a routerLink="/consulta" class="text-blue-400 hover:underline"
@@ -100,6 +117,13 @@ export class Login implements AfterViewInit, OnDestroy {
   protected readonly loading = signal(false);
   /** Datos para registrar a un estudiante que entra por primera vez. */
   protected readonly registro = signal<RegistroPendiente | null>(null);
+  /** Login falso: solo existe en desarrollo y el backend real lo rechaza (no es un token de Google). */
+  protected readonly devMode = isDevMode();
+  protected readonly usuariosDemo = [
+    { rol: 'Administrador', correo: 'admin.demo@uets.edu.ec' },
+    { rol: 'Animador', correo: 'animador.demo@uets.edu.ec' },
+    { rol: 'Estudiante', correo: 'estudiante.demo.est@uets.edu.ec' },
+  ];
 
   async ngAfterViewInit(): Promise<void> {
     try {
@@ -132,7 +156,7 @@ export class Login implements AfterViewInit, OnDestroy {
     void this.router.navigateByUrl(homeFor(data.usuario), { replaceUrl: true });
   }
 
-  private async handleCredential(credential: string): Promise<void> {
+  protected async handleCredential(credential: string): Promise<void> {
     this.error.set('');
     this.loading.set(true);
     try {

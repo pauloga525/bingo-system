@@ -9,7 +9,7 @@ cómo entra cada tipo de usuario y cómo publicarlo para que se use desde fuera 
 
 | Pieza | Carpeta | Qué hace | Dirección |
 | --- | --- | --- | --- |
-| **Base de datos** (MongoDB) | Servicio de Windows "MongoDB" | Guarda tablas, participantes, estudiantes, animadores | `mongodb://localhost:27017`, base `bingo_db` |
+| **Base de datos** (MongoDB) | Servicio de Windows "MongoDB" | Guarda tablas, participantes, estudiantes, animadores | `mongodb://localhost:27017`, base `bingo_db_prod` |
 | **Servidor del juego** (Python) | `bingo-system\backend` | Muestra el **tablero del bingo** y atiende la API del panel | `http://localhost:5000` |
 | **Panel web** (Angular) | `bingo-system\frontend` | Login con Google, venta de tablas, animadores, estudiantes, reportes, consulta pública | `http://localhost:3000` |
 
@@ -211,7 +211,7 @@ Antes de borrar, el servidor guarda un respaldo en `backend\backups\participante
 contiene cédulas y nombres: no lo comparta. Para restaurarlo:
 
 ```powershell
-& "C:\Program Files\MongoDB\Tools\100\bin\mongoimport.exe" --db=bingo_db --collection=Participantes --file="backups\participantes_<fecha>.json"
+& "C:\Program Files\MongoDB\Tools\100\bin\mongoimport.exe" --db=bingo_db_prod --collection=Participantes --file="backups\participantes_<fecha>.json"
 ```
 
 Después de restaurar, las tablas siguen marcadas como libres. Si necesita el estado exacto anterior,
@@ -274,7 +274,7 @@ anterior en `backend\backups\estudiantes_<fecha>.json` (contiene cédulas y nomb
 Para restaurarla:
 
 ```powershell
-& "C:\Program Files\MongoDB\Tools\100\bin\mongoimport.exe" --db=bingo_db --collection=Estudiantes --drop --file="backups\estudiantes_<fecha>.json"
+& "C:\Program Files\MongoDB\Tools\100\bin\mongoimport.exe" --db=bingo_db_prod --collection=Estudiantes --drop --file="backups\estudiantes_<fecha>.json"
 ```
 
 ---
@@ -284,7 +284,7 @@ Para restaurarla:
 **Respaldo** (hágalo antes de cualquier cambio grande y después de cada jornada de ventas):
 
 ```powershell
-& "C:\Program Files\MongoDB\Tools\100\bin\mongodump.exe" --db=bingo_db --gzip --out="backups\$(Get-Date -Format yyyy-MM-dd)"
+& "C:\Program Files\MongoDB\Tools\100\bin\mongodump.exe" --db=bingo_db_prod --gzip --out="backups\$(Get-Date -Format yyyy-MM-dd)"
 ```
 
 **Restaurar** un respaldo (reemplaza lo actual):
@@ -301,8 +301,10 @@ env\Scripts\python scripts\nueva_temporada.py "C:\...\Alumnos(2026-2027).xlsx" -
 env\Scripts\python scripts\nueva_temporada.py "C:\...\Alumnos(2026-2027).xlsx" --tablas 11000 --pdf "upload\tablas 2026.pdf" --ejecutar
 ```
 
-Temporada 2026 actual: 11 000 tablas (`upload\tablas 2026.pdf`), 4 195 estudiantes sin correo
-(se registran solos).
+Base actual: **`bingo_db_prod`** (desde el 2026-11-23): 4 195 estudiantes del Excel 2026-2027 sin
+correo (se registran solos), 117 animadores con su paralelo y **sin tablas ni participantes**; las
+tablas se generan con **Mantenimiento → Nuevo juego desde cero** (sección 5.6). La base anterior
+`bingo_db` se conserva como histórico. Para usar otra base, defina `MONGO_DB` en el `.env`.
 
 ---
 

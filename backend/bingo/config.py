@@ -38,7 +38,8 @@ class Settings:
     """
 
     mongo_uri: str = "mongodb://localhost:27017/"
-    mongo_db: str = "bingo_db"
+    # Base de producción (estudiantes 2026-2027 y animadores por paralelo). Se cambia con MONGO_DB.
+    mongo_db: str = "bingo_db_prod"
     json_dir: Path = BASE_DIR / "jsons"
     winners_dir: Path = BASE_DIR / "winners"
     upload_dir: Path = BASE_DIR / "upload"

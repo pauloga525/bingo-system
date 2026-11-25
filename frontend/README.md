@@ -65,13 +65,16 @@ El panel se publica en **<https://consultas.uets.edu.ec/>** (raíz del subdomini
    | Secret | `FTP_SERVER` | Servidor FTP, p. ej. `uets.edu.ec` (solo el nombre, sin `ftp://`) |
    | Secret | `FTP_USERNAME` | Usuario de la cuenta FTP del panel (p. ej. `consultas@uets.edu.ec`) |
    | Secret | `FTP_PASSWORD` | Contraseña de esa cuenta FTP |
-   | Variable | `API_URL` | Dirección **HTTPS** del servidor Python (p. ej. `https://api-bingo.midominio.com`) |
    | Variable (opcional) | `FTP_SERVER_DIR` | Carpeta de destino dentro de la cuenta FTP, terminada en `/`. Por defecto `./` (la cuenta entra directamente en la carpeta del panel) |
    | Variable (opcional) | `FRONTEND_BASE_HREF` | `/` por defecto (correcto para `consultas.uets.edu.ec`); solo cambia si el panel se mueve a una subcarpeta, p. ej. `/bingo/` |
    | Variable (opcional) | `GOOGLE_CLIENT_ID` | Solo si cambia el cliente de Google (por defecto, el de `public/env.js`) |
 
    Las contraseñas van en **Secrets**: GitHub las oculta en los registros y nadie puede leerlas
    después de guardarlas.
+
+   La dirección del servidor Python (`API_URL`, hoy `https://bingo.190-15-143-91.nip.io`) está
+   fija en `.github/workflows/frontend.yml`, job `deploy`. Si el backend cambia de dirección, se
+   cambia ahí y se hace push.
 3. **Servidor Python:** en su `.env`, ponga `CORS_ORIGINS=https://consultas.uets.edu.ec` (separe con
    comas si el panel también se abre desde otra dirección, p. ej. `http://localhost:3000`) y
    reinicie el servidor.

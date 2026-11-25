@@ -9,8 +9,8 @@ name: Frontend (CI/CD)
 #              FTP_USERNAME (cuenta FTP que entra directamente en
 #                            public_html/website_9a02b4bd, la carpeta de consultas.uets.edu.ec)
 #              FTP_PASSWORD
-#   Variables: API_URL        (obligatoria, dirección HTTPS del servidor Python)
-#              FTP_SERVER_DIR (opcional, por defecto ./ = la carpeta raíz de la cuenta FTP)
+# La dirección del servidor Python (API_URL) está fija más abajo, en el job deploy.
+#   Variables: FTP_SERVER_DIR (opcional, por defecto ./ = la carpeta raíz de la cuenta FTP)
 #              GOOGLE_CLIENT_ID, FRONTEND_BASE_HREF (opcionales)
 on:
   push:
@@ -69,6 +69,8 @@ jobs:
       name: hostgator
     env:
       DEPLOY_DIR: ${{ vars.FTP_SERVER_DIR || './' }}
+      # Servidor Python (backend) detrás de nginx con HTTPS en dbservertest01.
+      API_URL: https://bingo.190-15-143-91.nip.io
     steps:
       - name: Descargar el compilado
         uses: actions/download-artifact@v4
@@ -81,7 +83,6 @@ jobs:
           FTP_SERVER: ${{ secrets.FTP_SERVER }}
           FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
-          API_URL: ${{ vars.API_URL }}
         run: |
           faltan=""
           for v in FTP_SERVER FTP_USERNAME FTP_PASSWORD API_URL; do
@@ -128,7 +129,6 @@ jobs:
 
       - name: Generar env.js de producción
         env:
-          API_URL: ${{ vars.API_URL }}
           GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
         run: |
           node -e '
