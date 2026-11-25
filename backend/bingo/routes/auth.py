@@ -19,6 +19,7 @@ from ..auth import (
 )
 from ..config import Settings
 from ..db import get_db
+from ..domain.roles import ETIQUETAS, solo_externos
 from ..services.students import StudentService, full_name
 from ..utils import json_body
 
@@ -50,6 +51,10 @@ def _profile(identity: Identity) -> dict[str, Any]:
     user = identity.user or {}
     return {
         **base,
+        # Rol del vendedor (animador, secretaria, financiero, parroquia, oratorio o admin).
+        "cargo": identity.cargo,
+        "cargo_nombre": ETIQUETAS.get(identity.cargo, identity.cargo),
+        "solo_externos": solo_externos(identity.cargo),
         "id": identity.user_id,
         "usuario": user.get("usuario"),
         "nombres": user.get("nombres_completos"),

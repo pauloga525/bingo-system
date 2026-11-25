@@ -167,6 +167,26 @@ nombres, cédula, correo) o **eliminar** alumnos. Solo puede tocar alumnos de su
 cambiarlos de curso; eso lo hace el administrador en **Estudiantes**. Si no tiene curso asignado, la
 página se lo indica.
 
+### 5.1.3 Roles de vendedores: secretaría, financiero, parroquia y oratorio (administrador)
+En **Vendedores** (antes "Animadores") cada persona tiene un **Rol**:
+
+| Rol | Curso | Puede vender a |
+| --- | --- | --- |
+| Animador | Sí (un paralelo) | Alumnos, docentes y externos |
+| Secretaría, Financiero, Parroquia, Oratorio | No | **Solo externos** |
+
+Todos los roles tienen los mismos permisos en el panel (participantes, buscar, cartones). Se crean
+igual que un animador: **Nuevo vendedor** → nombre, correo `@uets.edu.ec`, rol. Luego se les
+**reserva** un rango de tablas (5.2). En su formulario de participante el tipo queda fijo en
+**Externo**, y el servidor rechaza cualquier otro tipo. No ven **Mi curso**.
+
+**Promociones (para todos):** el cobro se calcula por participante con todas sus tablas: paquetes de
+**5 por $10**, luego pares **2 por $5** y la suelta **1 por $3** (3 tablas = $8, 6 = $13, 7 = $15).
+Al añadir cartones a un participante se cobra solo la diferencia, con la promoción recalculada.
+
+**Reportes:** muestra tablas vendidas, dinero recaudado, promociones vendidas (cuántos paquetes de
+5, de 2 y sueltas), ventas **por rol** y **por cada vendedor**, con filtro por rol y búsqueda.
+
 ### 5.2 Reservar tablas a un animador (administrador)
 Un animador solo puede vender las tablas de su rango reservado, y cada temporada las reservas
 empiezan en cero.

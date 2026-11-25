@@ -8,6 +8,9 @@ Invariantes que este servicio mantiene en todos los flujos:
   ese usuario.
 - ``Participantes.total_pagar`` = ``calcular_total(len(tablas))`` y
   ``Users.total_vendido`` acumula esos montos.
+- Los vendedores con rol distinto de animador (secretaría, financiero,
+  parroquia, oratorio) solo registran participantes de tipo ``externo``.
+  ``rol_vendedor`` guarda el rol de quien vendió (lo usan los reportes).
 
 MongoDB standalone no ofrece transacciones, así que la asignación se hace
 tabla por tabla con un filtro condicional (``stateAsigned != True``) y, si
@@ -23,6 +26,7 @@ from bson import ObjectId
 
 from ..db import Collections, Doc
 from ..domain.pricing import calcular_total
+from ..domain.roles import ETIQUETAS, EXTERNO, rol_de, solo_externos
 from ..domain.serials import SerialRange
 from ..errors import ApiError, Conflict, Forbidden, NotFound
 from ..utils import ids_to_str, require_object_id, safe_int, try_object_id
@@ -197,6 +201,15 @@ class ParticipantService:
             raise
         return doc
 
+    @staticmethod
+    def _sale_type(seller: Doc, tipo: Any, default: str = "alumno") -> tuple[str, str]:
+        """``(tipo de participante, rol del vendedor)``; valida que el rol pueda venderle."""
+        rol = rol_de(seller)
+        valor = str(tipo or "").strip().lower() or (EXTERNO if solo_externos(rol) else default)
+        if solo_externos(rol) and valor != EXTERNO:
+            raise Forbidden(f"El rol {ETIQUETAS[rol]} solo puede vender tablas a participantes externos.")
+        return valor, rol
+
     # ----------------------------------------------------------- registro
     def register(self, data: dict[str, Any]) -> Doc:
         """Registra un participante con tablas elegidas (seriales u ObjectIds)."""
@@ -214,6 +227,7 @@ class ParticipantService:
             data["registrado_por"], "El campo 'registrado_por' debe ser un ID de usuario válido."
         )
         seller = self.get_user(seller_id)
+        tipo, rol = self._sale_type(seller, data.get("tipo"))
 
         self._check_quota(seller, len(refs))
         if not nombre:
@@ -233,7 +247,8 @@ class ParticipantService:
                 "cedula": cedula,
                 "celular": data.get("celular", ""),
                 "telefono": data.get("telefono", data.get("celular", "")),
-                "tipo": data.get("tipo", "alumno"),
+                "tipo": tipo,
+                "rol_vendedor": rol,
                 "nivelCurso": data.get("nivelCurso", ""),
                 "paralelo": data.get("paralelo", ""),
                 "animador": data.get("animador", ""),
@@ -259,6 +274,7 @@ class ParticipantService:
             raise ApiError("La cantidad de tablas debe ser mayor a 0.")
         seller_id = require_object_id(data["registrado_por"], "ID de usuario inválido")
         seller = self.get_user(seller_id, "Usuario no encontrado")
+        tipo, rol = self._sale_type(seller, data.get("tipo"))
 
         remaining = self._remaining(seller)
         if remaining <= 0:
@@ -285,6 +301,8 @@ class ParticipantService:
                 "apellido": data.get("apellido", ""),
                 "cedula": cedula,
                 "celular": data.get("celular", ""),
+                "tipo": tipo,
+                "rol_vendedor": rol,
                 "tablas": table_ids,
                 "registrado_por": seller_id,
                 "fecha_registro": datetime.now().isoformat(),

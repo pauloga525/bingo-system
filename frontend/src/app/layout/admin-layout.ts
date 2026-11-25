@@ -54,6 +54,12 @@ import { SessionService } from '../core/session';
               <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{
                 userName()
               }}</span>
+              @if (cargoNombre()) {
+                <span
+                  class="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                  >{{ cargoNombre() }}</span
+                >
+              }
             </div>
           }
           <button
@@ -85,15 +91,20 @@ export class AdminLayout {
     return u ? u.nombres || u.usuario || u.correo || 'Usuario' : '';
   });
 
+  protected readonly cargoNombre = computed(() => this.session.user()?.cargo_nombre || '');
+
   protected readonly links = computed(() => [
     { path: '/admin/users', label: 'Participantes' },
     { path: '/admin/buscar-participante', label: 'Buscar' },
     { path: '/admin/cartones', label: 'Cartones' },
-    ...(this.session.isAdmin() ? [] : [{ path: '/admin/mi-curso', label: 'Mi curso' }]),
+    // Solo los animadores tienen curso; los demás roles venden a externos.
+    ...(this.session.cargo() === 'animador'
+      ? [{ path: '/admin/mi-curso', label: 'Mi curso' }]
+      : []),
     ...(this.session.isAdmin()
       ? [
           { path: '/admin/reportes', label: 'Reportes' },
-          { path: '/admin/animadores', label: 'Animadores' },
+          { path: '/admin/animadores', label: 'Vendedores' },
           { path: '/admin/estudiantes', label: 'Estudiantes' },
           { path: '/admin/mantenimiento', label: 'Mantenimiento' },
         ]

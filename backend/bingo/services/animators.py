@@ -12,6 +12,10 @@ Cada animador tiene como máximo **un curso** (curso + especialidad + nivel +
 paralelo) y cada curso tiene como máximo **un animador**. Un animador puede
 quedar sin curso (campos ausentes) hasta que se le asigne uno. El curso se
 copia también en su cuenta de ``Users`` (lo usan los reportes y el perfil).
+
+Además de animadores, la colección guarda a los demás vendedores (secretaría,
+financiero, parroquia, oratorio; ver ``domain/roles.py``) en el campo ``rol``.
+Esos roles no tienen curso y solo venden a externos. Sin ``rol`` = animador.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 
 from ..db import Collections, Doc
+from ..domain.roles import ANIMADOR_ROL, ETIQUETAS, clean_rol, rol_de
 from ..errors import ApiError, Conflict, NotFound
 from ..utils import require_object_id, safe_int, set_or_unset
 
@@ -161,6 +166,7 @@ class AnimatorService:
                     {"profesor": pattern},
                     {"tutor": pattern},
                     {"correo": pattern},
+                    {"rol": pattern},
                     {"curso": pattern},
                     {"especialidad": pattern},
                     {"paralelo": pattern},
@@ -173,9 +179,12 @@ class AnimatorService:
     def serialize(self, doc: Doc) -> dict[str, Any]:
         user = self.linked_user(doc)
         course = course_of(doc)
+        rol = rol_de(doc)
         return {
             "_id": str(doc["_id"]),
             "nombre": animator_name(doc),
+            "rol": rol,
+            "rol_nombre": ETIQUETAS[rol],
             **(course or dict.fromkeys(COURSE_FIELDS, "")),
             "curso_asignado": course is not None,
             "correo": doc.get("correo", ""),
@@ -242,14 +251,24 @@ class AnimatorService:
         return [found[k] for k in sorted(found)]
 
     # ---------------------------------------------------------- escritura
-    def _clean(self, data: dict[str, Any], partial: bool) -> dict[str, Any]:
-        """Campos a guardar. El curso va como un todo: todos sus campos en ``None`` = sin curso."""
+    def _clean(self, data: dict[str, Any], partial: bool, current_rol: str = ANIMADOR_ROL) -> dict[str, Any]:
+        """Campos a guardar. El curso va como un todo: todos sus campos en ``None`` = sin curso.
+
+        Solo el rol ``animador`` tiene curso: con otro rol el curso se quita.
+        """
         fields: dict[str, Any] = {}
         if "nombre" in data or not partial:
             fields["nombre"] = clean_name(data.get("nombre"))
         if "correo" in data:
             fields["correo"] = validate_domain_email(data.get("correo"), self.staff_domain)
-        if not partial or any(k in data for k in COURSE_FIELDS):
+        if "rol" in data or not partial:
+            fields["rol"] = clean_rol(data.get("rol"))
+        rol = fields.get("rol", current_rol)
+        if rol != ANIMADOR_ROL:
+            if clean_course(data) is not None and any(k in data for k in COURSE_FIELDS):
+                raise ApiError(f"Solo los animadores tienen curso; el rol {ETIQUETAS[rol]} vende solo a externos.")
+            fields.update(dict.fromkeys(COURSE_FIELDS))
+        elif not partial or any(k in data for k in COURSE_FIELDS):
             fields.update(clean_course(data) or dict.fromkeys(COURSE_FIELDS))
         return fields
 
@@ -293,13 +312,14 @@ class AnimatorService:
             usuario = f"{base}{n}"
         return usuario
 
-    def _create_user(self, nombre: str, course: Course | None) -> ObjectId:
+    def _create_user(self, nombre: str, course: Course | None, rol: str = ANIMADOR_ROL) -> ObjectId:
         """Crea la cuenta operativa (``Users``, tipo animador, sin contraseña)."""
         user_id: ObjectId = self.cols.users.insert_one(
             {
                 "usuario": self._unique_username(nombre),
                 "nombres_completos": nombre,
                 "tipo_usuario": ANIMADOR,
+                "rol": rol,
                 **{k: v for k, v in (course or {}).items() if v not in (None, "")},
             }
         ).inserted_id
@@ -311,7 +331,7 @@ class AnimatorService:
         self._claim_course(fields, None, reassign)
         nombre = fields.pop("nombre")
         course = course_of(fields)
-        user_id = self._create_user(nombre, course)
+        user_id = self._create_user(nombre, course, fields["rol"])
         doc: Doc = {"profesor": nombre, "usuario_id": user_id}
         doc.update({k: v for k, v in fields.items() if v not in (None, "")})
         try:
@@ -326,7 +346,7 @@ class AnimatorService:
         if any(k in data for k in COURSE_FIELDS):
             # Cambio parcial del curso (p. ej. solo el paralelo): el resto se toma del actual.
             data = {**{k: doc.get(k) for k in COURSE_FIELDS}, **data}
-        fields = self._clean(data, partial=True)
+        fields = self._clean(data, partial=True, current_rol=rol_de(doc))
         self._ensure_email_free(fields.get("correo"), exclude=doc["_id"])
         self._claim_course(fields, doc["_id"], reassign)
 
@@ -343,11 +363,11 @@ class AnimatorService:
         updated = self.get(doc["_id"])
         if user is None:
             # Animador histórico sin cuenta en Users: se le crea para que pueda operar.
-            user_id = self._create_user(animator_name(updated), course_of(updated))
+            user_id = self._create_user(animator_name(updated), course_of(updated), rol_de(updated))
             self.cols.animators.update_one({"_id": doc["_id"]}, {"$set": {"usuario_id": user_id}})
             return self.serialize(self.get(doc["_id"]))
 
-        user_fields = {k: v for k, v in fields.items() if k in COURSE_FIELDS}
+        user_fields = {k: v for k, v in fields.items() if k in (*COURSE_FIELDS, "rol")}
         if "nombre" in fields:
             user_fields["nombres_completos"] = fields["nombre"]
         if user_fields:

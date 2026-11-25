@@ -78,6 +78,28 @@ export const descargarTablasPDF = (tablas: Tabla[], titulo: string, archivo: str
 
 /** Precio según la cantidad de tablas: 5 por $10, 2 por $5, 1 por $3. */
 export const calcularTotal = (numTablas: number): number => {
-  const resto = numTablas % 5;
-  return Math.floor(numTablas / 5) * 10 + Math.floor(resto / 2) * 5 + (resto % 2) * 3;
+  const { paquete5, paquete2, suelta } = desglose(numTablas);
+  return paquete5 * 10 + paquete2 * 5 + suelta * 3;
+};
+
+/** Promociones que se aplican (misma regla que el backend): 5 por $10, 2 por $5, 1 por $3. */
+export const desglose = (
+  numTablas: number,
+): { paquete5: number; paquete2: number; suelta: number } => {
+  const n = Math.max(0, Math.floor(numTablas));
+  const resto = n % 5;
+  return { paquete5: Math.floor(n / 5), paquete2: Math.floor(resto / 2), suelta: resto % 2 };
+};
+
+/** Texto como "1 × (5 por $10) + 1 × (2 por $5)"; vacío si no hay tablas. */
+export const textoPromociones = (numTablas: number): string => {
+  const d = desglose(numTablas);
+  return [
+    [d.paquete5, '5 por $10'],
+    [d.paquete2, '2 por $5'],
+    [d.suelta, '1 por $3'],
+  ]
+    .filter(([n]) => Number(n) > 0)
+    .map(([n, txt]) => `${n} × (${txt})`)
+    .join(' + ');
 };

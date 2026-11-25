@@ -1,13 +1,28 @@
 // Sesión del usuario: token firmado por el backend + perfil, guardados en localStorage.
 import { Injectable, computed, signal } from '@angular/core';
 
+/** Grupo de permisos: los vendedores (secretaría, financiero, ...) usan los de 'animador'. */
 export type Rol = 'admin' | 'animador' | 'estudiante';
 export const ROLES: readonly Rol[] = ['admin', 'animador', 'estudiante'];
+
+/** Rol del vendedor dentro del panel. Solo 'animador' tiene curso y vende a alumnos. */
+export type Cargo = 'admin' | 'animador' | 'secretaria' | 'financiero' | 'parroquia' | 'oratorio';
+export const CARGOS: Record<Exclude<Cargo, 'admin'>, string> = {
+  animador: 'Animador',
+  secretaria: 'Secretaría',
+  financiero: 'Financiero',
+  parroquia: 'Parroquia',
+  oratorio: 'Oratorio',
+};
 
 export interface Usuario {
   id: string | null;
   rol: Rol;
   tipo_usuario: number;
+  cargo?: Cargo;
+  cargo_nombre?: string;
+  /** true para secretaría, financiero, parroquia y oratorio. */
+  solo_externos?: boolean;
   correo?: string;
   usuario?: string;
   nombres?: string;
@@ -45,6 +60,13 @@ export class SessionService {
   readonly user = this._user.asReadonly();
   readonly role = computed(() => this._user()?.rol ?? null);
   readonly isAdmin = computed(() => this.role() === 'admin');
+  /** Rol del vendedor; las sesiones anteriores a los roles nuevos son animadores. */
+  readonly cargo = computed<Cargo | null>(() => {
+    const u = this._user();
+    if (!u || u.rol === 'estudiante') return null;
+    return u.cargo || (u.rol === 'admin' ? 'admin' : 'animador');
+  });
+  readonly soloExternos = computed(() => !!this._user()?.solo_externos);
 
   token(): string | null {
     return localStorage.getItem(TOKEN_KEY);

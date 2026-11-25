@@ -1,12 +1,14 @@
-// CRUD de animadores (solo admin). El correo es el que le permite iniciar sesión con Google.
+// CRUD de vendedores (solo admin): animadores y los roles secretaría, financiero, parroquia
+// y oratorio. El correo es el que le permite iniciar sesión con Google.
 // Cada animador tiene como máximo un curso (paralelo) y cada curso como máximo un animador.
+// Los demás roles no tienen curso y solo venden a externos.
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, computed, inject, signal } from '@angular/core';
 import { Edit, LucideAngularModule, Plus, Search, Trash2 } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
 import { errorBody, errorMessage, onlyDigits } from '../core/http';
-import { SessionService } from '../core/session';
+import { CARGOS, SessionService } from '../core/session';
 import { CrudField, CrudForm, CrudOption, CrudValues } from '../shared/crud-form';
 
 interface CursoBase {
@@ -19,6 +21,8 @@ interface CursoBase {
 interface Animador extends CursoBase {
   _id: string;
   nombre: string;
+  rol: string;
+  rol_nombre: string;
   correo: string;
   curso_asignado: boolean;
   usuario: string | null;
@@ -32,7 +36,12 @@ interface Curso extends CursoBase {
   animador_id: string | null;
 }
 
-type Filtro = 'todos' | 'con' | 'sin';
+/** 'todos', 'con' / 'sin' (curso) o 'rol:<rol>'. */
+type Filtro = string;
+const ROL_OPCIONES: CrudOption[] = Object.entries(CARGOS).map(([value, label]) => ({
+  value,
+  label: value === 'animador' ? `${label} (tiene curso)` : `${label} (solo externos)`,
+}));
 
 /** Clave única de un curso para la lista desplegable ('' = sin curso). */
 const cursoKey = (c: CursoBase): string =>
@@ -41,7 +50,7 @@ const cursoKey = (c: CursoBase): string =>
 const cursoNombre = (c: CursoBase): string =>
   [c.curso, c.especialidad, `${c.nivel}°`, c.paralelo].filter(Boolean).join(' · ');
 
-const HEADERS = ['Nombre', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
+const HEADERS = ['Nombre', 'Rol', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
 
 @Component({
   selector: 'app-animadores-admin',
@@ -50,18 +59,24 @@ const HEADERS = ['Nombre', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
     <div class="p-6 max-w-6xl mx-auto">
       <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
-          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Animadores</h1>
+          <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Vendedores</h1>
           <p class="text-sm text-gray-600 dark:text-gray-400">
             {{ animadores().length }} registrados · {{ conAcceso() }} con correo (pueden iniciar
             sesión) · {{ cursosLibres() }} de {{ cursos().length }} cursos sin animador
           </p>
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            Por rol:
+            @for (r of porRol(); track r.rol; let last = $last) {
+              {{ r.nombre }} {{ r.n }}{{ last ? '' : ' · ' }}
+            }
+          </p>
         </div>
         <button
           type="button"
-          (click)="editing.set({ cursoKey: '' })"
+          (click)="editing.set({ cursoKey: '', rol: 'animador' })"
           class="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg"
         >
-          <lucide-icon [img]="PlusIcon" [size]="16" /> Nuevo animador
+          <lucide-icon [img]="PlusIcon" [size]="16" /> Nuevo vendedor
         </button>
       </div>
 
@@ -70,7 +85,7 @@ const HEADERS = ['Nombre', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
           <input
             [value]="search()"
             (input)="search.set($any($event.target).value)"
-            placeholder="Buscar por nombre, correo, curso o paralelo"
+            placeholder="Buscar por nombre, correo, rol, curso o paralelo"
             class="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2 w-80"
           />
           <button
@@ -85,8 +100,11 @@ const HEADERS = ['Nombre', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
           class="border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg px-3 py-2"
         >
           <option value="todos">Todos</option>
-          <option value="con">Con curso</option>
-          <option value="sin">Sin curso</option>
+          <option value="con">Animadores con curso</option>
+          <option value="sin">Animadores sin curso</option>
+          @for (r of rolOpciones; track r.value) {
+            <option [value]="'rol:' + r.value">Rol: {{ r.label }}</option>
+          }
         </select>
       </div>
 
@@ -109,6 +127,7 @@ const HEADERS = ['Nombre', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
               @for (a of visibles(); track a._id) {
                 <tr class="border-t border-gray-200 dark:border-gray-700">
                   <td class="px-3 py-2">{{ a.nombre }}</td>
+                  <td class="px-3 py-2 whitespace-nowrap">{{ a.rol_nombre || 'Animador' }}</td>
                   <td class="px-3 py-2">
                     @if (a.correo) {
                       {{ a.correo }}
@@ -119,6 +138,11 @@ const HEADERS = ['Nombre', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
                   <td class="px-3 py-2">
                     @if (a.curso_asignado) {
                       {{ nombreCurso(a) }}
+                    } @else if (a.rol && a.rol !== 'animador') {
+                      <span
+                        class="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 px-2 py-0.5 rounded"
+                        >Solo externos</span
+                      >
                     } @else {
                       <span
                         class="text-xs bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 px-2 py-0.5 rounded"
@@ -164,7 +188,7 @@ const HEADERS = ['Nombre', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
               } @empty {
                 <tr>
                   <td [attr.colspan]="headers.length" class="px-3 py-4 text-center text-gray-500">
-                    No hay animadores para mostrar.
+                    No hay vendedores para mostrar.
                   </td>
                 </tr>
               }
@@ -175,7 +199,7 @@ const HEADERS = ['Nombre', 'Correo', 'Curso asignado', 'Usuario', 'Tablas', ''];
 
       @if (editing(); as e) {
         <app-crud-form
-          [title]="e['_id'] ? 'Editar animador' : 'Nuevo animador'"
+          [title]="e['_id'] ? 'Editar vendedor' : 'Nuevo vendedor'"
           [fields]="fields()"
           [initial]="e"
           [save]="guardar"
@@ -194,6 +218,7 @@ export class AnimadoresAdmin implements OnInit {
   protected readonly TrashIcon = Trash2;
   protected readonly headers = HEADERS;
   protected readonly nombreCurso = cursoNombre;
+  protected readonly rolOpciones = ROL_OPCIONES;
 
   protected readonly animadores = signal<Animador[]>([]);
   protected readonly cursos = signal<Curso[]>([]);
@@ -206,11 +231,22 @@ export class AnimadoresAdmin implements OnInit {
 
   protected readonly conAcceso = computed(() => this.animadores().filter((a) => a.correo).length);
   protected readonly cursosLibres = computed(() => this.cursos().filter((c) => !c.animador).length);
+  protected readonly porRol = computed(() =>
+    Object.entries(CARGOS).map(([rol, nombre]) => ({
+      rol,
+      nombre,
+      n: this.animadores().filter((a) => (a.rol || 'animador') === rol).length,
+    })),
+  );
   protected readonly visibles = computed(() => {
     const f = this.filtro();
-    return this.animadores().filter((a) =>
-      f === 'todos' ? true : f === 'con' ? a.curso_asignado : !a.curso_asignado,
-    );
+    const esAnimador = (a: Animador) => (a.rol || 'animador') === 'animador';
+    return this.animadores().filter((a) => {
+      if (f.startsWith('rol:')) return (a.rol || 'animador') === f.slice(4);
+      if (f === 'con') return esAnimador(a) && a.curso_asignado;
+      if (f === 'sin') return esAnimador(a) && !a.curso_asignado;
+      return true;
+    });
   });
 
   /** Campos del formulario; la lista de cursos marca cuáles ya tienen animador. */
@@ -244,8 +280,16 @@ export class AnimadoresAdmin implements OnInit {
         placeholder: 'nombre@uets.edu.ec',
       },
       {
+        name: 'rol',
+        label: 'Rol',
+        type: 'select',
+        required: true,
+        wide: true,
+        options: ROL_OPCIONES,
+      },
+      {
         name: 'cursoKey',
-        label: 'Curso (paralelo)',
+        label: 'Curso (paralelo) — solo para animadores',
         type: 'select',
         wide: true,
         options: opciones,
@@ -279,16 +323,25 @@ export class AnimadoresAdmin implements OnInit {
   }
 
   protected editar(a: Animador): void {
-    this.editing.set({ _id: a._id, nombre: a.nombre, correo: a.correo, cursoKey: cursoKey(a) });
+    this.editing.set({
+      _id: a._id,
+      nombre: a.nombre,
+      correo: a.correo,
+      rol: a.rol || 'animador',
+      cursoKey: cursoKey(a),
+    });
   }
 
   protected readonly guardar = async (values: CrudValues): Promise<void> => {
-    const [curso = '', especialidad = '', nivel = '', paralelo = ''] = String(
-      values['cursoKey'] || '',
+    const rol = String(values['rol'] || 'animador');
+    // Los roles distintos de animador no tienen curso: se envía vacío.
+    const [curso = '', especialidad = '', nivel = '', paralelo = ''] = (
+      rol === 'animador' ? String(values['cursoKey'] || '') : ''
     ).split('|');
     const payload: Record<string, unknown> = {
       nombre: values['nombre'],
       correo: values['correo'] || '',
+      rol,
       curso,
       especialidad,
       nivel: nivel ? Number(nivel) : '',

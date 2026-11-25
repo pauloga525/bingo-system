@@ -33,6 +33,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from .config import Settings
 from .db import Collections, Doc, get_db
+from .domain.roles import ADMIN_ROL, rol_de
 from .errors import ApiError, Forbidden
 from .services.animators import AnimatorService, normalize_email
 from .services.participants import is_admin
@@ -76,6 +77,9 @@ class Identity:
     email: str
     user: Doc | None = None  # cuenta de ``Users`` (admin/animador)
     student: Doc | None = None  # documento de ``Estudiantes``
+    # Rol del vendedor (animador, secretaria, financiero, parroquia, oratorio) o ``admin``.
+    # ``rol`` es el grupo de permisos; los vendedores comparten los del animador.
+    cargo: str = ""
 
     @property
     def user_id(self) -> str | None:
@@ -154,13 +158,15 @@ def _staff_identity(cols: Collections, settings: Settings, email: str) -> Identi
         if not admin or not is_admin(admin):
             logger.error("No existe el usuario administrador %r en Users", settings.admin_usuario)
             raise Forbidden("Tu cuenta no tiene acceso al sistema.")
-        return Identity(ADMIN, email, user=admin)
+        return Identity(ADMIN, email, user=admin, cargo=ADMIN_ROL)
     svc = AnimatorService(cols, settings.staff_domain)
     animator = svc.by_email(email)
     user = svc.linked_user(animator) if animator else None
-    if not user:
+    if not user or animator is None:
         return None
-    return Identity(ADMIN if is_admin(user) else ANIMADOR, email, user=user)
+    if is_admin(user):
+        return Identity(ADMIN, email, user=user, cargo=ADMIN_ROL)
+    return Identity(ANIMADOR, email, user=user, cargo=rol_de(animator))
 
 
 def verify_google_credential(credential: Any) -> str:

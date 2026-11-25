@@ -122,6 +122,10 @@ export class Login implements AfterViewInit, OnDestroy {
   protected readonly usuariosDemo = [
     { rol: 'Administrador', correo: 'admin.demo@uets.edu.ec' },
     { rol: 'Animador', correo: 'animador.demo@uets.edu.ec' },
+    { rol: 'Secretaría', correo: 'secretaria.demo@uets.edu.ec' },
+    { rol: 'Financiero', correo: 'financiero.demo@uets.edu.ec' },
+    { rol: 'Parroquia', correo: 'parroquia.demo@uets.edu.ec' },
+    { rol: 'Oratorio', correo: 'oratorio.demo@uets.edu.ec' },
     { rol: 'Estudiante', correo: 'estudiante.demo.est@uets.edu.ec' },
   ];
 

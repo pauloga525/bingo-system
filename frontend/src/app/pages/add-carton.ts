@@ -1,16 +1,13 @@
 // Agregar cartones (tablas) a un participante existente.
 import { HttpClient } from '@angular/common/http';
-import { Component, computed, inject, input, signal } from '@angular/core';
+import { Component, OnInit, computed, inject, input, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { ArrowLeft, LucideAngularModule, Plus, Save, X } from 'lucide-angular';
 import { firstValueFrom } from 'rxjs';
 
 import { errorMessage } from '../core/http';
 import { SessionService } from '../core/session';
-
-/** Precio: 2 tablas por $5, 1 por $3. */
-const calcularTotal = (cantidad: number): number =>
-  Math.floor(cantidad / 2) * 5 + (cantidad % 2) * 3;
+import { calcularTotal, textoPromociones } from '../core/tablas';
 
 @Component({
   selector: 'app-add-carton',
@@ -66,6 +63,14 @@ const calcularTotal = (cantidad: number): number =>
             <p class="text-lg font-semibold text-gray-800 dark:text-gray-100">
               Total a pagar: <span class="text-blue-600">\${{ total() }}</span>
             </p>
+            <!-- La promoción se calcula sobre todas las tablas del participante. -->
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+              Ya tiene {{ actuales() }} tabla(s) (\${{ pagadoAntes() }}). Con estas quedan
+              {{ actuales() + validos().length }} → \${{ totalNuevo() }}
+              @if (promociones()) {
+                ({{ promociones() }})
+              }
+            </p>
           </div>
           <div class="mt-8 flex justify-end gap-4">
             <button
@@ -89,7 +94,7 @@ const calcularTotal = (cantidad: number): number =>
     </div>
   `,
 })
-export class AddCarton {
+export class AddCarton implements OnInit {
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
   private readonly session = inject(SessionService);
@@ -103,12 +108,33 @@ export class AddCarton {
 
   protected readonly cartones = signal<string[]>(['', '']);
   protected readonly loading = signal(false);
-  private readonly validos = computed(() =>
+  /** Tablas que el participante ya tiene (la promoción cuenta todas). */
+  protected readonly actuales = signal(0);
+  protected readonly validos = computed(() =>
     this.cartones()
       .map((c) => c.trim())
       .filter(Boolean),
   );
-  protected readonly total = computed(() => calcularTotal(this.validos().length));
+  protected readonly pagadoAntes = computed(() => calcularTotal(this.actuales()));
+  protected readonly totalNuevo = computed(() =>
+    calcularTotal(this.actuales() + this.validos().length),
+  );
+  /** Lo que se cobra ahora: la diferencia, igual que el servidor. */
+  protected readonly total = computed(() => this.totalNuevo() - this.pagadoAntes());
+  protected readonly promociones = computed(() =>
+    textoPromociones(this.actuales() + this.validos().length),
+  );
+
+  async ngOnInit(): Promise<void> {
+    try {
+      const resp = await firstValueFrom(
+        this.http.get<{ tablas?: unknown[] }>(`/api/obtenerTablasParticipante/${this.userId()}`),
+      );
+      this.actuales.set(resp.tablas?.length || 0);
+    } catch {
+      this.actuales.set(0);
+    }
+  }
 
   protected volver(): void {
     void this.router.navigate(['/admin/user', this.userId(), 'cartones']);

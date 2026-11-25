@@ -6,10 +6,33 @@ from collections import Counter
 from typing import Any
 
 from ..db import Collections
-from ..domain.pricing import calcular_total
+from ..domain.pricing import PROMOCIONES, calcular_total, desglose
+from ..domain.roles import ADMIN_ROL, ETIQUETAS, ROLES, rol_de
 from ..utils import try_object_id
 
-_USER_FIELDS = {"nombres_completos": 1, "usuario": 1, "curso": 1, "especialidad": 1, "nivel": 1, "paralelo": 1}
+_USER_FIELDS = {
+    "nombres_completos": 1,
+    "usuario": 1,
+    "curso": 1,
+    "especialidad": 1,
+    "nivel": 1,
+    "paralelo": 1,
+    "tipo_usuario": 1,
+    "rol": 1,
+}
+_PROMOS = tuple(PROMOCIONES)
+
+
+def _ventas_vacias() -> dict[str, Any]:
+    return {"participantes": 0, "tablas": 0, "monto": 0, "promociones": dict.fromkeys(_PROMOS, 0)}
+
+
+def _sumar(destino: dict[str, Any], tablas: int, monto: int, promos: dict[str, int]) -> None:
+    destino["participantes"] += 1
+    destino["tablas"] += tablas
+    destino["monto"] += monto
+    for k, n in promos.items():
+        destino["promociones"][k] += n
 
 
 def _top(counter: Counter[str]) -> str | None:
@@ -40,17 +63,25 @@ class ReportService:
                     "curso": 1,
                     "paralelo": 1,
                     "especialidad": 1,
+                    "rol_vendedor": 1,
                 },
             )
         )
         user_ids = {oid for p in participantes if (oid := try_object_id(p.get("registrado_por")))}
         usuarios: dict[str, dict[str, Any]] = {}
-        if user_ids:
-            for u in self.cols.users.find({"_id": {"$in": list(user_ids)}}, _USER_FIELDS):
-                usuarios[str(u["_id"])] = {
-                    "nombre": u.get("nombres_completos") or u.get("usuario") or "Desconocido",
-                    **{k: u.get(k) for k in ("usuario", "curso", "especialidad", "nivel", "paralelo")},
-                }
+        # Todos los vendedores (aunque no hayan vendido) más quienes registraron participantes.
+        for u in self.cols.users.find(
+            {"$or": [{"tipo_usuario": {"$ne": 0}}, {"_id": {"$in": list(user_ids)}}]}, _USER_FIELDS
+        ):
+            usuarios[str(u["_id"])] = {
+                "nombre": u.get("nombres_completos") or u.get("usuario") or "Desconocido",
+                "rol": rol_de(u),
+                **{k: u.get(k) for k in ("usuario", "curso", "especialidad", "nivel", "paralelo")},
+            }
+        por_vendedor: dict[str, dict[str, Any]] = {uid: _ventas_vacias() for uid in usuarios}
+        por_rol: dict[str, dict[str, Any]] = {rol: _ventas_vacias() for rol in (*ROLES, ADMIN_ROL)}
+        promociones_total: dict[str, int] = dict.fromkeys(_PROMOS, 0)
+        dinero = 0
 
         tablas_vendidas = 0
         ventas_por_usuario: Counter[str] = Counter()
@@ -64,10 +95,19 @@ class ReportService:
             num_tablas = len(p.get("tablas") or [])
             # Misma regla de cobro que al registrar (antes el reporte usaba otra).
             monto = calcular_total(num_tablas)
+            promos = desglose(num_tablas)
             tablas_vendidas += num_tablas
+            dinero += monto
+            for k, n in promos.items():
+                promociones_total[k] += n
 
             uid = try_object_id(p.get("registrado_por"))
             u = usuarios.get(str(uid), {}) if uid else {}
+            if uid and str(uid) in por_vendedor:
+                _sumar(por_vendedor[str(uid)], num_tablas, monto, promos)
+            # Rol al momento de la venta; las ventas antiguas toman el rol actual del vendedor.
+            rol = str(p.get("rol_vendedor") or u.get("rol") or "animador")
+            _sumar(por_rol.setdefault(rol, _ventas_vacias()), num_tablas, monto, promos)
             ventas_por_usuario[str(u.get("nombre", "Desconocido"))] += monto
             ventas_por_grupo[str(p.get("grupoAdetitss") or p.get("grupoAdetiss") or "Sin grupo")] += monto
 
@@ -89,7 +129,42 @@ class ReportService:
             grupo_top = {"nombre": nombre, "total": total}
 
         tablas_ganadoras = len(ganadoras_ids)
+        vendedores = [
+            {
+                "id": uid,
+                "nombre": usuarios[uid]["nombre"],
+                "usuario": usuarios[uid].get("usuario"),
+                "rol": usuarios[uid]["rol"],
+                "rol_nombre": ETIQUETAS.get(usuarios[uid]["rol"], usuarios[uid]["rol"]),
+                **ventas,
+            }
+            for uid, ventas in por_vendedor.items()
+        ]
+        vendedores.sort(key=lambda v: (-v["tablas"], v["nombre"]))
+        roles = [
+            {
+                "rol": rol,
+                "nombre": ETIQUETAS.get(rol, rol),
+                "vendedores": sum(1 for u in usuarios.values() if u["rol"] == rol),
+                **ventas,
+            }
+            for rol, ventas in por_rol.items()
+        ]
         return {
+            # Ventas reales (dinero con las promociones aplicadas).
+            "tablas_vendidas": tablas_vendidas,
+            "dinero_recaudado": dinero,
+            "promociones": {
+                k: {
+                    **PROMOCIONES[k],
+                    "cantidad": n,
+                    "tablas_en_promocion": n * PROMOCIONES[k]["tablas"],
+                    "monto": n * PROMOCIONES[k]["precio"],
+                }
+                for k, n in promociones_total.items()
+            },
+            "ventas_por_rol": roles,
+            "ventas_por_vendedor": vendedores,
             "total_tablas": total_tablas,
             "tablas_ganadoras": tablas_ganadoras,
             "total_participantes": total_participantes,

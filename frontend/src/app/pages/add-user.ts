@@ -7,7 +7,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { errorMessage } from '../core/http';
 import { SessionService } from '../core/session';
-import { calcularTotal } from '../core/tablas';
+import { calcularTotal, textoPromociones } from '../core/tablas';
 
 type Tipo = 'alumno' | 'docente' | 'externo';
 
@@ -71,11 +71,18 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
         <form (submit)="enviar($event)" class="space-y-6">
           <fieldset>
             <legend [class]="legend">Tipo de Participante</legend>
-            <select [value]="tipo()" (change)="cambiarTipo($event)" [class]="input">
-              <option value="alumno">Alumno</option>
-              <option value="docente">Docente</option>
-              <option value="externo">Externo</option>
-            </select>
+            @if (soloExternos()) {
+              <input value="Externo" readonly [class]="input" />
+              <p class="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                Su rol ({{ usuario()?.cargo_nombre }}) solo puede vender tablas a externos.
+              </p>
+            } @else {
+              <select [value]="tipo()" (change)="cambiarTipo($event)" [class]="input">
+                <option value="alumno">Alumno</option>
+                <option value="docente">Docente</option>
+                <option value="externo">Externo</option>
+              </select>
+            }
           </fieldset>
 
           @if (tipo() === 'alumno') {
@@ -223,6 +230,9 @@ const nivelCursoDe = (curso: string, nivel: unknown): string => {
             <p class="text-gray-700 dark:text-gray-300 text-lg">
               Total a pagar: <span class="font-bold text-green-600">\${{ totalPagar() }}</span>
             </p>
+            @if (promociones()) {
+              <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">{{ promociones() }}</p>
+            }
           </fieldset>
 
           <button
@@ -254,7 +264,9 @@ export class AddUser {
   /** Rango de tablas reservado, enviado por la lista de participantes. */
   protected readonly rango: { fromSerial?: string; toSerial?: string } = history.state || {};
 
-  protected readonly tipo = signal<Tipo>('alumno');
+  /** Secretaría, financiero, parroquia y oratorio solo venden a externos. */
+  protected readonly soloExternos = this.session.soloExternos;
+  protected readonly tipo = signal<Tipo>(this.session.soloExternos() ? 'externo' : 'alumno');
   protected readonly datos = signal<Datos>({ ...VACIO });
   protected readonly tablas = signal<string[]>(['']);
   protected readonly cantidadSolicitada = signal(1);
@@ -267,6 +279,7 @@ export class AddUser {
       .filter(Boolean),
   );
   protected readonly totalPagar = computed(() => calcularTotal(this.tablasValidas().length));
+  protected readonly promociones = computed(() => textoPromociones(this.tablasValidas().length));
 
   protected volver(): void {
     void this.router.navigateByUrl('/admin/users');
