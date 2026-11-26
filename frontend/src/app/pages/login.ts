@@ -19,6 +19,7 @@ import { errorBody, errorMessage } from '../core/http';
 import { conMensaje } from '../core/loading';
 import { SesionResponse, SessionService, homeFor } from '../core/session';
 import { AccesoExterno } from './acceso-externo';
+import { AyudaLogin } from './ayuda-login';
 import { RegistroEstudiante } from './registro-estudiante';
 
 interface RegistroPendiente {
@@ -28,7 +29,7 @@ interface RegistroPendiente {
 
 @Component({
   selector: 'app-login',
-  imports: [RegistroEstudiante, AccesoExterno],
+  imports: [RegistroEstudiante, AccesoExterno, AyudaLogin],
   template: `
     <div class="min-h-screen bg-gray-900 flex items-center justify-center px-4 py-12">
       <div
@@ -47,6 +48,23 @@ interface RegistroPendiente {
             </svg>
           </div>
           <h2 class="text-3xl font-bold text-white">Bingo UETS</h2>
+          <button
+            type="button"
+            (click)="ayuda.set(true)"
+            class="mt-3 inline-flex items-center gap-1.5 text-sm text-yellow-400 hover:text-yellow-300 hover:underline"
+          >
+            <svg
+              class="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01" />
+            </svg>
+            ¿Cómo ver mis tablas? Instructivo
+          </button>
         </div>
 
         <div class="grid grid-cols-2 gap-2 bg-gray-900 p-1 rounded-xl" role="tablist">
@@ -148,6 +166,10 @@ interface RegistroPendiente {
         }
       </div>
     </div>
+
+    @if (ayuda()) {
+      <app-ayuda-login [inicial]="modo()" (cerrar)="ayuda.set(false)" />
+    }
   `,
 })
 export class Login implements AfterViewInit, OnDestroy {
@@ -168,6 +190,8 @@ export class Login implements AfterViewInit, OnDestroy {
   protected readonly tabInactiva = 'py-2 rounded-lg text-sm text-gray-300 hover:bg-gray-800';
   protected readonly error = signal('');
   protected readonly loading = signal(false);
+  /** Modal de ayuda con los pasos y el instructivo en PDF para estudiantes y público general. */
+  protected readonly ayuda = signal(false);
   /** Datos para registrar a un estudiante que entra por primera vez. */
   protected readonly registro = signal<RegistroPendiente | null>(null);
   /** Login falso: solo existe en desarrollo y el backend real lo rechaza (no es un token de Google). */
